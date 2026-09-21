@@ -1,0 +1,20 @@
+# Entorno PyTorch — usado para:
+#   - Freepik/nsfw_image_detector (EVA-02, via transformers)
+#   - AIML-TUDA/LlavaGuard (LLaVA-OneVision, via transformers)
+#   - MobileViT (via timm), tanto para fine-tuning como para inferencia
+#
+# NOTA: instalar torch con soporte CUDA según GPU, ver
+# https://pytorch.org/get-started/locally/ — la línea de abajo asume CPU/CUDA
+# genérico, ajustar índice de wheels si es necesario.
+
+torch==2.2.*
+torchvision==0.17.*
+transformers==4.44.*
+accelerate==0.33.*
+timm==1.0.*
+Pillow==10.*
+numpy==1.26.*
+pandas==2.2.*
+scikit-learn==1.5.*
+tqdm==4.66.*
+huggingface_hub==0.24.*

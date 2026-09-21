@@ -1,0 +1,27 @@
+
+services:
+  tf:
+    build:
+      context: .
+      dockerfile: docker/tf.Dockerfile
+    volumes:
+      - .:/workspace
+      - ${RAW_DATA_PATH:-./raw_data}:/raw_data:ro
+    working_dir: /workspace
+
+  torch:
+    build:
+      context: .
+      dockerfile: docker/torch.Dockerfile
+    volumes:
+      - .:/workspace
+      - ${RAW_DATA_PATH:-./raw_data}:/raw_data:ro
+      # Cache de Hugging Face persistente entre corridas, para no re-descargar
+      # los modelos (Freepik, LlavaGuard) cada vez que se levanta el contenedor.
+      - hf_cache:/root/.cache/huggingface
+    working_dir: /workspace
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+
+volumes:
+  hf_cache:

@@ -1,0 +1,18 @@
+
+# Entorno TensorFlow — usado SOLO para:
+#   - GantMan/nsfw_model (MobileNetV2, Keras/TF)
+#   - LAION-AI/CLIP-based-NSFW-Detector (la cabeza MLP se carga con autokeras/Keras;
+#     el encoder de imagen de CLIP se calcula con open_clip, PyTorch, pero se instala
+#     aquí también porque este script corre aparte del entorno PyTorch principal
+#     para no mezclar dependencias de TF y del entorno grande de HF/transformers)
+
+tensorflow==2.15.*
+autokeras==1.1.*
+keras-cv==0.9.*
+open_clip_torch==2.24.*
+torch==2.2.*          # solo para calcular embeddings de CLIP, no para entrenar
+Pillow==10.*
+numpy==1.26.*
+pandas==2.2.*
+tqdm==4.66.*
+requests==2.31.*
