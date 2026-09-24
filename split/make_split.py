@@ -16,18 +16,12 @@ import argparse
 import csv
 import hashlib
 from pathlib import Path
+from to_binary import BINARY_LABEL, CLASSES, to_binary
 from sklearn.model_selection import train_test_split
 
 
 SEED = 42 
 
-BINARY_LABEL = {
-    "porn": "NSFW",
-    "hentai": "NSFW",
-    "sexy": "NSFW",
-    "neutral": "SFW",
-    "drawings": "SFW",
-}
 
 BINARY_LABEL_INT = {
     "porn": 1,
@@ -37,7 +31,6 @@ BINARY_LABEL_INT = {
     "drawings": 0,
 }
 
-CLASSES = list(BINARY_LABEL.keys())
 
 
 def list_images(raw_data_dir: Path):
@@ -64,16 +57,6 @@ def file_hash(path: str, block_size: int = 65536) -> str:
         for block in iter(lambda: f.read(block_size), b""):
             h.update(block)
     return h.hexdigest()
-
-
-def to_binary(class_name: str) -> str:
-    """Convierte un nombre de clase original (nombre de carpeta) a 'NSFW' o 'SFW'."""
-    class_name = class_name.strip().lower()
-    if class_name not in BINARY_LABEL:
-        raise ValueError(
-            f"Clase desconocida: '{class_name}'. Se esperaba una de {CLASSES}"
-        )
-    return BINARY_LABEL[class_name]
 
 
 def to_binary_int(class_name: str) -> int:
