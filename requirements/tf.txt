@@ -8,7 +8,7 @@
 
 tensorflow==2.15.*
 tensorflow-hub==0.16.*
-autokeras==1.1.*
+autokeras==1.0.*
 keras-cv==0.9.*
 open_clip_torch==2.24.*
 torch==2.2.*          # solo para calcular embeddings de CLIP, no para entrenar
