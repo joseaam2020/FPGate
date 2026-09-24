@@ -12,7 +12,8 @@ WORKDIR /workspace
 
 COPY requirements/torch.txt /tmp/requirements.txt
 # torch/torchvision ya vienen en la imagen base; evitar reinstalarlos
-RUN grep -v -E "^torch(vision)?==" /tmp/requirements.txt > /tmp/requirements_filtered.txt \
-    && pip install --no-cache-dir -r /tmp/requirements_filtered.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    grep -v -E "^torch(vision)?==" /tmp/requirements.txt > /tmp/requirements_filtered.txt \
+    && pip install -r /tmp/requirements_filtered.txt
 
 ENTRYPOINT ["python"]
