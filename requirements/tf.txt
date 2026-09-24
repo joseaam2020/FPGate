@@ -7,6 +7,7 @@
 #     para no mezclar dependencias de TF y del entorno grande de HF/transformers)
 
 tensorflow==2.15.*
+tensorflow-hub==0.16.*
 autokeras==1.1.*
 keras-cv==0.9.*
 open_clip_torch==2.24.*
