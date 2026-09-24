@@ -4,8 +4,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import List, Dict
 
-from PIL import Image
-
 @dataclass
 class Prediction:
     filepath: str
@@ -21,18 +19,26 @@ class NSFWModelWrapper(ABC):
     """
 
     name: str = "unamed_model"
+    current_filepath: str = "empty" 
+    image = None
 
     @abstractmethod
-    def _predict_probability(self, image: Image.Image) -> float:
+    def _predict_probability(self) -> float:
         """
-        Retorna la probabilidad de NSFW (0-1) para una imagen
-
-        Args:
-            image: una imagen en formato pillow
+        Retorna la probabilidad de NSFW (0-1) para una imagen y guarda el filepath si necesario
         
         Returns:
             Probabilidad de que la imagen sea nsfw (float de 0-1)
-            
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _preprocess(self, filepath: str) -> None:
+        """
+        Ejecuta cualquier pre-procesamiento necesario para la imagen en cuestion
+
+        Args:
+            filepath: direccion a la imagen a procesar
         """
         raise NotImplementedError
 
@@ -47,10 +53,10 @@ class NSFWModelWrapper(ABC):
         Returns:
             Resultado de la prediccion (Prediction)
         """
+        self._preprocess(filepath=filepath) 
 
-        image = Image.open(filepath).convert("RGB")
         start = perf_counter()
-        probability = self._predict_probability(image)
+        probability = self._predict_probability()
         elapsed_ms = (perf_counter() - start) * 1000
 
         probability = max(0.0, min(1.0, float(probability))) # Normalizar el valor
