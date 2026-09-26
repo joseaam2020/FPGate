@@ -8,6 +8,13 @@ services:
       - .:/workspace
       - ${RAW_DATA_PATH:-./raw_data}:/raw_data:ro
     working_dir: /workspace
+    deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
 
   torch:
     build:
@@ -22,6 +29,13 @@ services:
     working_dir: /workspace
     environment:
       - HF_HOME=/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   hf_cache:
