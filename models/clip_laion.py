@@ -17,13 +17,12 @@ class LaionClipDetector(NSFWModelWrapper):
         mlp_head_path: str,
         clip_model_name: str = "ViT-L-14",
         clip_pretrained: str = "openai", 
-        device: str = "cpu"
     ):
-        self.device = device
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.clip_model, _, self.preprocess = open_clip.create_model_and_transforms(
             clip_model_name, pretrained=clip_pretrained
         )
-        self.clip_model = self.clip_model.to(device).eval()
+        self.clip_model = self.clip_model.to(self.device).eval()
         self.mlp_head = keras_load_model(mlp_head_path, custom_objects=ak.CUSTOM_OBJECTS, compile=False)
     
     def _preprocess(self, filepath: str) -> None:

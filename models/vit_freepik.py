@@ -18,7 +18,8 @@ class FreepikEva02(NSFWModelWrapper):
 
     def __init__(self, model_id: str = "Freepik/nsfw_image_detector"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model  = AutoModelForImageClassification.from_pretrained(model_id, torch_dtype=torch.bfloat16).to(self.device)
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
+        self.model  = AutoModelForImageClassification.from_pretrained(model_id, torch_dtype=dtype).to(self.device)
         cfg = get_pretrained_cfg("eva02_base_patch14_448.mim_in22k_ft_in22k_in1k")
         self.processor: Compose = create_transform(**resolve_data_config(cfg.__dict__))
 
