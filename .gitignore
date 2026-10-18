@@ -1,0 +1,6 @@
+raw_data/
+models/weights/
+__pycache__/
+*.py[cod]
+reporte_vit/
+analysis/
