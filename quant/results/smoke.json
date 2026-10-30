@@ -1,0 +1,39 @@
+{
+ "csv": "split/val.csv",
+ "n_images": 10,
+ "suite": "smoke",
+ "calib": "quant/calib/calib_stats.json",
+ "score": "low+medium+high>=0.5",
+ "seconds": 8.9,
+ "configs": {
+  "all_p99.9": {
+   "quantize": [
+    "patch",
+    "qkv",
+    "proj",
+    "fc1",
+    "fc2",
+    "head"
+   ],
+   "percentile": "99.9",
+   "pct_override": {},
+   "fc2_in_bits": 8
+  }
+ },
+ "summary": {
+  "float": {
+   "acc": 1.0,
+   "fn": 0,
+   "fp": 0,
+   "flips_vs_float": 0,
+   "mean_abs_logit_err": 0.0
+  },
+  "all_p99.9": {
+   "acc": 0.5,
+   "fn": 5,
+   "fp": 0,
+   "flips_vs_float": 5,
+   "mean_abs_logit_err": 3.4469025135040283
+  }
+ }
+}
