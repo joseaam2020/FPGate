@@ -39,7 +39,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/11e82e24bd58f9f75342e1e03dd5b37ffaf91d51e5101fb7adc9545913bd7c8f.jpg,porn,NSFW
 /workspace/raw_data/drawings/e2fede5efb3109c0718693c40ffc1ea174788a480ed890ec1590f80579f35987.jpg,drawings,SFW
 /workspace/raw_data/porn/d05b8bf5f1b1f7627a02d3e9898de409c278915702773803d53d170e52b824e4.jpg,porn,NSFW
-/workspace/raw_data/hentai/2df74108ae0e2a573f37b9a2e85b6600e1fc43211f5bdca984d02f9505e31306.jpg,hentai,NSFW
 /workspace/raw_data/sexy/3403e0bbec4d6b9eff3d3340727332fdbb9adb2dea0a168fcb93cc2a9f96792d.jpg,sexy,NSFW
 /workspace/raw_data/hentai/82004574_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/sexy/80460864b82c3da2a79d614678643f16653fc8fb957bff2d6161edd6d2f65ebb.jpg,sexy,NSFW
@@ -282,7 +281,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/0ea74446a910ca61d3d3c6f9cf72d72979804b884478635a41eac8a711687ebb.jpg,sexy,NSFW
 /workspace/raw_data/hentai/3840616829dcaf83d77d167ad99fc8f699d2abf92547a8e6ced5dd46e9f3faa1.jpg,hentai,NSFW
 /workspace/raw_data/neutral/9d883819ab645df633622b53e5c268ad06df19639e5d6e40e9ab2844cb8f4dcc.jpg,neutral,SFW
-/workspace/raw_data/drawings/fbf0fb7e1ba447cf03cd3fcd147df52719ac358771636cf18f947aa3ab4aa955.jpg,drawings,SFW
 /workspace/raw_data/hentai/bb3c32039bb9cccb4bc67f8deefb5128cb97baf633c9438e3810e051aa64a303.jpg,hentai,NSFW
 /workspace/raw_data/drawings/e5658084756adf00c88c3948143dbfe8b11fac0d4d23d33c6f4c40ce2269053a.jpg,drawings,SFW
 /workspace/raw_data/sexy/7fbdb0382ecaa71b36f03ef1e02f93213d74f2ca412b8514aa046e3f72229cca.jpg,sexy,NSFW
@@ -412,7 +410,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/2939002.jpg,hentai,NSFW
 /workspace/raw_data/sexy/bbdd1e8b27f55f3429a6e0dd8a1d53175c0d403edf5254edcb6a21ec11f55313.jpg,sexy,NSFW
 /workspace/raw_data/porn/9e2e9ed1b35593aac0c3da2270b8d483d8443ed62ed81fbbeed211e153e0ed36.jpg,porn,NSFW
-/workspace/raw_data/hentai/2a83bf68aac7b228a214c450d07091936499408dce588e08f027cd3f859f41df.jpg,hentai,NSFW
 /workspace/raw_data/neutral/cc5ee86d5a1631fd5270699eca43002ae38df0c25bf1cad3d1dbc77eb54790a8.jpg,neutral,SFW
 /workspace/raw_data/drawings/94ecec82e97e0659778ef22587fb5bdd4637eafcac14a64f235bc3427111ca3a.jpg,drawings,SFW
 /workspace/raw_data/drawings/3ba3122ca0f786501e988cfba3cbbd86c33ab83ded43b167267cc41042c074fc.jpg,drawings,SFW
@@ -458,7 +455,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/7fb9154daa592c75ca6a0045db1f51a74a49f00c2d8b756d17302ffe4ec85cec.jpg,sexy,NSFW
 /workspace/raw_data/drawings/a8c03803eb65c30f43c78af4d2bd8b7275c8cf6e44981bf9ad66e2cb974bfa26.jpg,drawings,SFW
 /workspace/raw_data/neutral/d529ef146795de54bb2474155a627aed8cb7d912a3b8fa767ccaaa56b63848d3.jpg,neutral,SFW
-/workspace/raw_data/sexy/5b636fd4e0eef778f8bcc2764ab3c6eb736d52a17ece4613e144c35b20e3e74c.jpg,sexy,NSFW
 /workspace/raw_data/sexy/848e499a430326b4e2fd101c96f35ebab854ecf9d2c965e2bab84e004e55f9c6.jpg,sexy,NSFW
 /workspace/raw_data/neutral/16d682525b40bbf92265b055cb3005386a393c7de1c29456ae12956f65c24569.jpg,neutral,SFW
 /workspace/raw_data/neutral/b4077982e79398a90218aa72bf22b9e9057a1bdef1bca7eb72ba822b4014bcb4.jpg,neutral,SFW
@@ -553,14 +549,12 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/8865bf74aa2970a0d80ce1b23dc7e75c3feb4ebb98a1f1e78e265989e192f950.jpg,drawings,SFW
 /workspace/raw_data/neutral/94ff805e7a702aac002dde29b1b0e04f7b5251dc71392117e43294c2cb9700b5.jpg,neutral,SFW
 /workspace/raw_data/sexy/4bd88c04f9a8c3675ecc9dfb8a4aa73745ab13a6b7e0ae3d7d1b86c07080ddba.jpg,sexy,NSFW
-/workspace/raw_data/neutral/964237efc644c0b3925cc53ff618721e76a66d34fc18508c9a606afa91973ab0.jpg,neutral,SFW
 /workspace/raw_data/hentai/94504684_p2_master1200.jpg,hentai,NSFW
 /workspace/raw_data/porn/264ca499b0f0a64053052ccd21476bbb0b4e11da70a279f3de71c45b127f73b5.jpg,porn,NSFW
 /workspace/raw_data/sexy/02e2e58ceb8261458dd5d132ea042ccd031b9b627c6320d865c1a3fdb404e69c.jpg,sexy,NSFW
 /workspace/raw_data/drawings/14ea6e4939b4a4f6aabc059d811dd266971faf141a53f6b22ade02bbc1c37d2c.jpg,drawings,SFW
 /workspace/raw_data/porn/04983f44a8c32e522bbe6edc6397d28f654fee832faacdc77d11bcf644a74d9f.jpg,porn,NSFW
 /workspace/raw_data/neutral/76f31c76f4cffb2d8aae89be74d69f6eeccce12c757f0353b60a471676becdee.jpg,neutral,SFW
-/workspace/raw_data/porn/e5d1d36b37153b5342ba1394f24804aec4bf41f546f967f348b086472fa8859c.jpg,porn,NSFW
 /workspace/raw_data/sexy/83848d990781897a3c357954b1f54ffa0aac5a8d45dc04dab02b4c0747d0e990.jpg,sexy,NSFW
 /workspace/raw_data/hentai/614880.jpg,hentai,NSFW
 /workspace/raw_data/drawings/726caa27ce493c23187068e9e1f5a5e4ff7d82a1a08e5edc0f143038d3f84a6a.jpg,drawings,SFW
@@ -690,7 +684,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/5b7e4fb2bddcba07de86e6c66ee6ac8584367ac31c21af558851a5374859947f.jpg,neutral,SFW
 /workspace/raw_data/hentai/2341661.jpg,hentai,NSFW
 /workspace/raw_data/drawings/64a304a7d2bcc06f6ca4b9edb28a320a1e614f7d87becaa22ec1ac720e3d3a92.jpg,drawings,SFW
-/workspace/raw_data/porn/bedddae8ec224fe2e84d3586b66166c290dbf49359f0cd8297e110079f773299.jpg,porn,NSFW
 /workspace/raw_data/porn/a0391122658fa882f825ad156cfc36ce1cc1859758d96dde9eef760bcb396d0b.jpg,porn,NSFW
 /workspace/raw_data/hentai/763e46ef9409b69e544d945e732bdac10d32061175dabb3f47a92f7d7ee357c2.jpg,hentai,NSFW
 /workspace/raw_data/hentai/5935280.jpg,hentai,NSFW
@@ -846,7 +839,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/46f40161579dda5fcf8111f9c36663b4ef5b94f5dfc55ea4422651ae490f3046.jpg,drawings,SFW
 /workspace/raw_data/hentai/103442269_p1_master1200.jpg,hentai,NSFW
 /workspace/raw_data/sexy/6f56d27576b1ab44dafba9210591ebd56f9109ef781b0ff9f615424dc78da5d7.jpg,sexy,NSFW
-/workspace/raw_data/sexy/e5320110dfc62114be783d77a66f83335855b764149a276925406a0d6c533fe6.jpg,sexy,NSFW
 /workspace/raw_data/neutral/acd89c446586731501ee58e28695bad9ed58ccbff46eab631e4a2db343234d56.jpg,neutral,SFW
 /workspace/raw_data/porn/293b35c866f5452989916f07491ec3d456cd64db0949ae255e777430cca2af4a.jpg,porn,NSFW
 /workspace/raw_data/sexy/4ea4e50ee1b16ebece95f46d09c9d97e3ba119c49094df7b5576c9b1a7bcdf6a.jpg,sexy,NSFW
@@ -901,7 +893,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/2c5250d6974ea0c64973f1a7c216d8d3f72a6c8f9eb476677975e4d2c2733e82.jpg,porn,NSFW
 /workspace/raw_data/neutral/cb274539d8a1c60402cdebd45b3dcb743689faea6e7730e44d0fa05b71d86da4.jpg,neutral,SFW
 /workspace/raw_data/sexy/430a247661b7f9acf18101b9194a7c6b76556e153af5afcd83585d6f592300bf.jpg,sexy,NSFW
-/workspace/raw_data/porn/e808f1aabfb2bd78fe923636d06c5577cf813d5aca2b23e16f17088b02888a99.jpg,porn,NSFW
 /workspace/raw_data/porn/c76dc41f25bae3680754b6c208b307bbd3faa83f69a0fa590f727b505bc1d604.jpg,porn,NSFW
 /workspace/raw_data/drawings/55ecfa5af7400f16c0358052617c0d825969e7fab628e751628a30e78a0957aa.jpg,drawings,SFW
 /workspace/raw_data/sexy/56465e9b58a51b16fb04ff7a484b865689fa5c3300df47b477ee8bd90f637d80.jpg,sexy,NSFW
@@ -949,7 +940,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/a52dd4eb488927385e92d45299d0008c7157ce6bf761727c457120d045c46081.jpg,drawings,SFW
 /workspace/raw_data/sexy/90ed2775acdad6e3d67b4fb71811bb227cf590fca46ca7be73e3b16c93bb2409.jpg,sexy,NSFW
 /workspace/raw_data/drawings/f104c13a992d358d261c0bd9dd5957e0b60ae2a3fec57e5dd76a4ad75f940d1f.jpg,drawings,SFW
-/workspace/raw_data/sexy/9ba84b1c17f7445d5038778af269cdfc8c33d713501189afaa2143922353e843.jpg,sexy,NSFW
 /workspace/raw_data/neutral/9ae54f899e5f3c906e6f9024191292802aeb542faf5f3ddeee91c30380e81f6e.jpg,neutral,SFW
 /workspace/raw_data/neutral/4a20e49d1028eed19d1ed789b17b5c9f6833d26eaac5ecff814cb420956800c0.jpg,neutral,SFW
 /workspace/raw_data/neutral/56dfde0ca7f9bde134adc2cc1adfb37c6be84ef2fa8d922a7ae951707b3d44bc.jpg,neutral,SFW
@@ -964,7 +954,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/39e860cda076e85c128874f5bba1d3a20e650ee42b1fa37c78da175626577619.jpg,porn,NSFW
 /workspace/raw_data/drawings/f0cbc3238ffa2bc3c454ecce49fc6c9428404c371b309c8527aecf34d2d0d9a5.jpg,drawings,SFW
 /workspace/raw_data/sexy/2d65fd169896e658767ae7697132b6f0b9b6e737634bcbe031a430b1afbacfe3.jpg,sexy,NSFW
-/workspace/raw_data/drawings/86ab00d1205d93d16898a394cfbc5c8fa47a9c8452b401e302b5e434fc6c904b.jpg,drawings,SFW
 /workspace/raw_data/drawings/c14b10577f58f88ed304d25efae39285cf26ec3239f8092bb87fe98a1b084772.jpg,drawings,SFW
 /workspace/raw_data/neutral/2dfbf610cdd160a0ad27185c0673e2e00e8096ce3ae967b199b313dcbae1d6c0.jpg,neutral,SFW
 /workspace/raw_data/drawings/a23d771eaa7d9b2692882e1aa0f453a333df0bb834eb7e14e90847f8c4e294ce.jpg,drawings,SFW
@@ -1100,9 +1089,7 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/6e09edefd46cf9c0aeeddf3ef8c058a6071773c7241ee7414d7dd55d95c76c82.jpg,hentai,NSFW
 /workspace/raw_data/porn/99136b4f7ac1a435893f2a14a61de3137bc8e10ed834d27b0ec0ca504436bc6f.jpg,porn,NSFW
 /workspace/raw_data/drawings/f141812f10ae27a159053cef17d7a9c93bc957422b1443bafa6801fefde865ce.jpg,drawings,SFW
-/workspace/raw_data/drawings/996291de648a070e24244c13f49312e2b2dd6f9eca96dab0322df7045274a25a.jpg,drawings,SFW
 /workspace/raw_data/drawings/dc449858101262c96c326b30ec9de36d53d34c4d57a2c33bc9aaa7f711a887c2.jpg,drawings,SFW
-/workspace/raw_data/neutral/0ef18769f6c30ceb97a40da1b65b975e30b375fea03e044ffca35e362731665a.jpg,neutral,SFW
 /workspace/raw_data/hentai/b910997f2712e2c0126c4bc0f5d32396b147e1d30357252900acdeadd1a7276b.jpg,hentai,NSFW
 /workspace/raw_data/neutral/f02075a270b98123ce211bb5ecf53726f568adac02216303436937df5662e8c3.jpg,neutral,SFW
 /workspace/raw_data/sexy/8a0e51f71672c36a1748fddc1bd07f8a6933cdb734a091fb39f3c8e8750f2f81.jpg,sexy,NSFW
@@ -1295,7 +1282,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/862d1367dda6726d0ffd52e74ebf08eff4d19eb55dca0643d238da06b6ac742c.jpg,porn,NSFW
 /workspace/raw_data/porn/f2e1e623253a0da42857e7781351a09e1c27e7ad0711c24155d2f801201d5ab7.jpg,porn,NSFW
 /workspace/raw_data/porn/451787e22da81792d0a5b590238408d9fa75ec439a88487561bc973600e583ed.jpg,porn,NSFW
-/workspace/raw_data/hentai/1b9604902f996a09db56ab6f1015675d448b11f15b3fa4e3970b7c59ead4b448.jpg,hentai,NSFW
 /workspace/raw_data/porn/b60fec93a821239378b2e9e817c41fa2eb26da59ff9796c38548a73d42414cc8.jpg,porn,NSFW
 /workspace/raw_data/drawings/6a911fa53fe80160ad2c6112cb9dfca98a6e8aa7bd072a262902c52d01fcdae2.jpg,drawings,SFW
 /workspace/raw_data/drawings/33156133c7345ef380e47c259119892e4aad0e9b0af1a280e0abeea2c8f00e14.jpg,drawings,SFW
@@ -1582,7 +1568,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/bf741c6fbb74915a74dc8ecbfe7b2d698850302d23b80231838c2e59bf4435bf.jpg,porn,NSFW
 /workspace/raw_data/drawings/e2312990d5a7e24709a9276436ee1749f23e33e56b3cb7f87dccba017a7d8aa3.jpg,drawings,SFW
 /workspace/raw_data/hentai/92261153_p0_master1200.jpg,hentai,NSFW
-/workspace/raw_data/drawings/78d1c15be6f6216d775d3f685cd2ee5fe728885a1f8b6808b61d8c5f5b48d1c8.jpg,drawings,SFW
 /workspace/raw_data/neutral/d595a9351c81ffe5f17a5c84afcf87492bd5c60d971dffde92c5c693aed7f915.jpg,neutral,SFW
 /workspace/raw_data/porn/ed3b474e4fe3c5b1b26569942ebedaa5ebf7b909d4913c2bb6d045729597960f.jpg,porn,NSFW
 /workspace/raw_data/drawings/5a51cd2218853f88435b4925d38b43acfb447382af59cf88199540e8faab435f.jpg,drawings,SFW
@@ -1653,7 +1638,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/085e3c33c0cbce83e96b425775b6f414bd458a8cee4c6ec51f46d111ff05abba.jpg,porn,NSFW
 /workspace/raw_data/drawings/6d8dd7e73100d2ca36187343ae2be3f502baf63d6236a4334f116103011ba6c3.jpg,drawings,SFW
 /workspace/raw_data/porn/02f8f3f7ea31caeff70033d93aeda4c8d6de1e4c20de4629de303cf155c217c2.jpg,porn,NSFW
-/workspace/raw_data/porn/b6efd6ba9a5e236c2f3b0e6b545280fd4baecaada96d66c162c493cbaee90331.jpg,porn,NSFW
 /workspace/raw_data/sexy/cb698c573d2d2a77c35b8734714504b47f8bac99966d44268a061827ae120f71.jpg,sexy,NSFW
 /workspace/raw_data/drawings/c20108ee693d45cb90d5050086d241e042b67924318a809637cb0576868cddcd.jpg,drawings,SFW
 /workspace/raw_data/neutral/477ace792c4a734717d393e03c7b6036edd93d335c745b835b53fb5613096a9b.jpg,neutral,SFW
@@ -1764,7 +1748,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/1578556.jpg,hentai,NSFW
 /workspace/raw_data/neutral/6663d73012bb29b49bf3f1f3d29b75083963023873e2603f1404ceb8e9fba2a2.jpg,neutral,SFW
 /workspace/raw_data/neutral/74184a1355042beaf8135cdf06d67d1635652d093afcac1b1233b033bd794ef5.jpg,neutral,SFW
-/workspace/raw_data/hentai/06b3432f07027347e68bbef41514242daf3b15aceeffcf3ba5804ac79d27ca92.jpg,hentai,NSFW
 /workspace/raw_data/neutral/4d24be3f311c1193c8423cdc27d3f3e5f254abe345771b0be4a517a094b11fbb.jpg,neutral,SFW
 /workspace/raw_data/hentai/0fcc7397a992f59bb3e9f9ae52e6572ec4172b7c77c1934caf19bbc21bd8c1f3.jpg,hentai,NSFW
 /workspace/raw_data/sexy/de034a72651404a12f6a75a6b76e939c9a7dde0184048672dd1bede682181588.jpg,sexy,NSFW
@@ -1791,7 +1774,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/333f4123a41ecfc0e06c48ca4e72594e43bb7b85cd4501b091f31f9be89d44e4.jpg,drawings,SFW
 /workspace/raw_data/sexy/5332c1c09b49c88f6503e39e041da7778be75f8f7674b672a58a5cf7616de788.jpg,sexy,NSFW
 /workspace/raw_data/sexy/d0fbe6724cff78574149be59b54ea12c97dd476ae4b8eb310fc6d592f983c9d9.jpg,sexy,NSFW
-/workspace/raw_data/hentai/b7c889b008a1378d4de0eb91933653668044c232c814811bf6abb5303c781614.jpg,hentai,NSFW
 /workspace/raw_data/sexy/e1727c895f7da0540d907cffecc72e3f10617ad218a7d448f07a21844ea347b2.jpg,sexy,NSFW
 /workspace/raw_data/sexy/ff6d3db148001080682fa679807a08d5a9323f6b1c6398a489c9c0a3a8636376.jpg,sexy,NSFW
 /workspace/raw_data/drawings/95d51458c05e76b2790ff26ca38d887e15304b74b49fc91f16b1694920838079.jpg,drawings,SFW
@@ -1945,7 +1927,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/d016359b11da4076509d4f3a71ddc4447f352875542de81395e0445c31ed5a6e.jpg,neutral,SFW
 /workspace/raw_data/hentai/386012.jpg,hentai,NSFW
 /workspace/raw_data/porn/21ca96f8a86ed9c26b94f6a32b8b69a4825592aec2fb11d3ac34643c9fc9de97.jpg,porn,NSFW
-/workspace/raw_data/sexy/8cc84244a54fc8587078dee3a28db0a796d2cfc1f9e642d6d69abfd915f93b1b.jpg,sexy,NSFW
 /workspace/raw_data/sexy/b4939de167f5c55a69b2f666b00d7fe065bf1149770a06c1c61f7f88ac3d30ee.jpg,sexy,NSFW
 /workspace/raw_data/neutral/cd7f5864f057f2d1641c3235520752f7064751d69137ce22ba6fb45d14cfdbc8.jpg,neutral,SFW
 /workspace/raw_data/neutral/cce24972aecb430af1517f6ef6040ce4f62776482460c4a5e6137932e9c309dc.jpg,neutral,SFW
@@ -1974,7 +1955,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/99e276c9a86137c958117081a5f2e26d1a358fcd634b4b01a74515aac4e5c86d.jpg,drawings,SFW
 /workspace/raw_data/neutral/92942059b1c1755e12dc537059970a2742b4447362b2fd4d793da7164e29b06e.jpg,neutral,SFW
 /workspace/raw_data/porn/28dd3ed65fb3a4ff9ded9ab9c89be1cbbc7a69935db55ba1213396d93c6dd6db.jpg,porn,NSFW
-/workspace/raw_data/sexy/7c53a65a8c444054c86b93bc5a5b8053f3982b8c6d9da8af5508d85a9dc1c09a.jpg,sexy,NSFW
 /workspace/raw_data/hentai/90160577_p3_master1200.jpg,hentai,NSFW
 /workspace/raw_data/porn/e9f7574ba39e160f72599aa040cff4244748212282d0ae5ccb165fbf4686af89.jpg,porn,NSFW
 /workspace/raw_data/neutral/99acd10ca6cbaba70fcd5ab85b9c70cfa6058dd8a6e2196635da9751e10d3f4d.jpg,neutral,SFW
@@ -2034,7 +2014,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/88393195_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/drawings/01bd74c64865680345d35ca05eba91dc328b9e12a247651172f3a491f5cdc0e6.jpg,drawings,SFW
 /workspace/raw_data/sexy/0a7446ef87e1865fe809915f4036df2de2c7974a600c0b84bdc1a3d05d9ff4d6.jpg,sexy,NSFW
-/workspace/raw_data/drawings/3410f90265bfb36ced3d0bd43e621e20b9e46a1309bd5c5975293de5b981ffb0.jpg,drawings,SFW
 /workspace/raw_data/hentai/01c75f4e728194746602fecfbcad2ca033602c72f6c63b858bae365a09ae080c.jpg,hentai,NSFW
 /workspace/raw_data/neutral/b0b21783ca4abf57d8ba3932dd5d6aaadcfed00a2e53df3731b7c343849c7510.jpg,neutral,SFW
 /workspace/raw_data/drawings/109c7103feb44a957e92b7da15c7f17775f8b0708228dd2c1503d6886f7cfca0.jpg,drawings,SFW
@@ -2044,7 +2023,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/552551.jpg,hentai,NSFW
 /workspace/raw_data/sexy/83a4a01cd65fc3faaa58e49ad21c7a31fec1274ee52478b1cebd18484ed07073.jpg,sexy,NSFW
 /workspace/raw_data/porn/7db0a67c4111b7e8c3ab1a8b8717c4d1a6659937f907d438684f011bbdbfaaf6.jpg,porn,NSFW
-/workspace/raw_data/porn/77633ae8c5e3cbd9e4c50adbb1ad78ff948d33d3853baf89662154ac8bd88fb1.jpg,porn,NSFW
 /workspace/raw_data/sexy/0293889288951cf96784b4d20927a37f9de0da851ac07b29667e5a0c8d95e7e0.jpg,sexy,NSFW
 /workspace/raw_data/neutral/0e997c5ab1cc8049a804462f0447d109aa507252a132dffc3079bf0ab365310e.jpg,neutral,SFW
 /workspace/raw_data/hentai/6145d03e2936dab3d7ecae71a97b5c2a0c2d476000238b644bd959345e750da0.jpg,hentai,NSFW
@@ -2055,7 +2033,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/150b837257818cc03650cb7f6b9228fc08df0b99a7b8ffc404ec310d46520854.jpg,porn,NSFW
 /workspace/raw_data/hentai/16284cece44898e444c70bd00b77c4023ee971fdf8992e4cbb9e102d28ac15f1.jpg,hentai,NSFW
 /workspace/raw_data/sexy/8effe56c0421d2eaa63f86a9364978b4df02556055dbcd81d0f2c562c92e80b7.jpg,sexy,NSFW
-/workspace/raw_data/sexy/bed2afc0c60b857ce5d5723cbe2d8ed4377338d31857626e3eb21fa099f24649.jpg,sexy,NSFW
 /workspace/raw_data/porn/fe127649341fd8e02359a09ac98fc2b083238e583753652ad6dcce3549a2de0b.jpg,porn,NSFW
 /workspace/raw_data/porn/857513ad245f4e4b728ab635d72ded476e96d2e8d8c74b4211c21b754a7b1f2b.jpg,porn,NSFW
 /workspace/raw_data/hentai/aeea0193dc80c24b88cd6409d547217dd8088151220da58779cff9f72e2c937c.jpg,hentai,NSFW
@@ -2132,7 +2109,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/d5d877eff518e425e34d8b00972e9a049873c4fbb40b71b831d93d25c99b5653.jpg,neutral,SFW
 /workspace/raw_data/neutral/9bb65744ef1d950cd7397a29ece01abf79ccaba888a570b7182372909a256f28.jpg,neutral,SFW
 /workspace/raw_data/porn/92e6f31b8d670d6de2c3e49c3184e3f16ed45f6579e36f2ed41d6ef97e1ee582.jpg,porn,NSFW
-/workspace/raw_data/sexy/f64740debd657d7864810dcdb9c9c129a92d675963f0e66b3539bf192fc1b288.jpg,sexy,NSFW
 /workspace/raw_data/sexy/55d1485aca02af546abded8b7149fb1f31f8d3818b42870c4626a14ddabfd05c.jpg,sexy,NSFW
 /workspace/raw_data/hentai/66562802_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/hentai/2724845.jpg,hentai,NSFW
@@ -2149,7 +2125,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/89f8e2cd2bff4dc06fccac43236d8e45138691158ce003f3d56745d7b8c755d9.jpg,drawings,SFW
 /workspace/raw_data/hentai/cae61e3222ce3daf5731a4c0ac90f9343167c460ae74e587adb520b2cd92adcc.jpg,hentai,NSFW
 /workspace/raw_data/hentai/a7910dfaad88bc7f7845671e7b048acdcae20198be2ed640321dbcdd83d153d0.jpg,hentai,NSFW
-/workspace/raw_data/sexy/9a6774c684653f098979ffdd77a066a9e97a659c4327645e264ff6b64f1a77b8.jpg,sexy,NSFW
 /workspace/raw_data/porn/f9881be7a4ee19536aeb1160cba6d42771698077ae4d9f29fe1bf0bff2cf552d.jpg,porn,NSFW
 /workspace/raw_data/hentai/1419467.jpg,hentai,NSFW
 /workspace/raw_data/drawings/0a1fca39c02e791cfee38da8400572b01279ba6710bb07c3196439c5b107bfe5.jpg,drawings,SFW
@@ -2268,7 +2243,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/97304573_p2_master1200.jpg,hentai,NSFW
 /workspace/raw_data/drawings/bab8e5da9bc2bd9758ff1276b26cbdb23e2c86606e1aec80a79759149e658750.jpg,drawings,SFW
 /workspace/raw_data/porn/d43f789a2b778236cc35cdc84c85fb10d539f96fc8161c41110b09cc61bbd8e3.jpg,porn,NSFW
-/workspace/raw_data/hentai/aeedcd47a944e1bd85019bb684adf0a59891e76c25deb2117fc7ad39cc154204.jpg,hentai,NSFW
 /workspace/raw_data/neutral/4815d101596ce07810b73a9c699c9458288ddeaf92076eb5773bdd420f447658.jpg,neutral,SFW
 /workspace/raw_data/neutral/2f46ca1904894cb37a85afd5f6f31a3dcf46b90ff46d02df9220b2a1d515936e.jpg,neutral,SFW
 /workspace/raw_data/neutral/8a9993b702044ff25f8a008e4d1762a15b2ff1278b49b72a14ebf68b05eb1308.jpg,neutral,SFW
@@ -2309,7 +2283,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/6e240feb9223900e6ab083ba6c48ea63ebb50b72c76fee9593c575d8a7723ee0.jpg,sexy,NSFW
 /workspace/raw_data/neutral/a2136fea3edbc23fdaa6c423b5fdc0ebcf9b3afbabb5ec341d4b9d28333482d8.jpg,neutral,SFW
 /workspace/raw_data/porn/2d3cae9dce297bea017acca5fffaff45f382d7d7d376929c7453d4cc3bb09fbd.jpg,porn,NSFW
-/workspace/raw_data/sexy/be5df04d6eb080bbd49cc0b8e37118c07b2634aaf28ad124b731d097da74f86a.jpg,sexy,NSFW
 /workspace/raw_data/neutral/ed714b03c31861857151e6420c6d69062fad98d3e4d2dacdd161470c194af2fe.jpg,neutral,SFW
 /workspace/raw_data/drawings/a7f651bab976892fabc0501bc08380e9416c330dad4c20e08600679ee2c413ff.jpg,drawings,SFW
 /workspace/raw_data/neutral/3219917b42968a16422cf90ef50cfce5f8edd0ee9b8d8557bc1dafe8351eae5a.jpg,neutral,SFW
@@ -2360,7 +2333,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/dea0a98709799965f6ba201e7a74c948540c1cd5f3298d7b5efb06110bc4108f.jpg,drawings,SFW
 /workspace/raw_data/hentai/7120fec17ddcfe339bd3b6997ff4c87b19aa3c972c1188c62decbb5a2e8a1546.jpg,hentai,NSFW
 /workspace/raw_data/sexy/59375c6f78e98e14adce084b30eeea3ea72cd9713fa90c5b24fb8144ee0edb62.jpg,sexy,NSFW
-/workspace/raw_data/sexy/fa08a3bd7cd8389b448dc8d6152813ce981c0247cfed696ce330f1e919d0b4db.jpg,sexy,NSFW
 /workspace/raw_data/sexy/0542eaa847054eab55c83c06ca46484c87109b72bb63beca9dd4346af57a3791.jpg,sexy,NSFW
 /workspace/raw_data/hentai/b0be372c14716dc26ff1797daa78068718fd420a208a4643d4e586736381fd62.jpg,hentai,NSFW
 /workspace/raw_data/drawings/c77539c4d7f250ac11b1d102cd7fd978ed18496edbc66d20fc9afdb37d901b14.jpg,drawings,SFW
@@ -2536,7 +2508,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/77054094_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/sexy/07d10386ab2d46ed03e757147f086c649022e5f08bcf252818fb68197ccb9475.jpg,sexy,NSFW
 /workspace/raw_data/sexy/e2303f064f17a80b8908a9610b19574c88e2b996029dea3c39977197b606f7d4.jpg,sexy,NSFW
-/workspace/raw_data/drawings/3eb2bcba76475fe897d3435f0964ec8f9addc9e652d00ec79801eef7b50d61d3.jpg,drawings,SFW
 /workspace/raw_data/sexy/294ff1ef6d22aec55c98dba1403f949ade2debecc710ea628cb2cffd95360b67.jpg,sexy,NSFW
 /workspace/raw_data/hentai/97304573_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/neutral/19773699b55d6aca47d9aa7278270a0d5159f8068732c4b56b7bd2284032ef0d.jpg,neutral,SFW
@@ -2706,7 +2677,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/ed9750037a616066015f886f6d3a927486fc1fdae52b94b777326e1aa339bc23.jpg,drawings,SFW
 /workspace/raw_data/neutral/4eaa2be2f813e497a25605959d40bcca50c99e14e17473286174903b69df47cd.jpg,neutral,SFW
 /workspace/raw_data/hentai/82727802_p3_master1200.jpg,hentai,NSFW
-/workspace/raw_data/neutral/aab28c5595ed757866487490c2f7a08405e22c503aa22f374d0bfd03b3dde759.jpg,neutral,SFW
 /workspace/raw_data/porn/a2d89928c69eaa95e611db4166547747cb3d7ad46492e788dbd61c30fe17f106.jpg,porn,NSFW
 /workspace/raw_data/neutral/51e948069a56790363585c6840b3825240935903652666faaecb39cd94d4bd8d.jpg,neutral,SFW
 /workspace/raw_data/hentai/3169701.jpg,hentai,NSFW
@@ -2901,7 +2871,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/2dcd6ecfdcd515ae58d917df9d43f163014280a5e75e12576a587b68354d761d.jpg,drawings,SFW
 /workspace/raw_data/sexy/0593dcdb446cce3bd141651b7aea5bf5feee8b589bae6bb9e15d60714c8148a6.jpg,sexy,NSFW
 /workspace/raw_data/hentai/61289046a3301967285a5613f277e2f3c0fbcbfdb728a6e4adc10644e9c8e87b.jpg,hentai,NSFW
-/workspace/raw_data/hentai/10cffdb9c66a7928b6e1dd37d1615bc1b6f0cf9b770593b65a39c49576f50c30.jpg,hentai,NSFW
 /workspace/raw_data/porn/1f687f6f6bb0746f780b39b602b14fcc95e254c5e11a685a4d13dce2239a66af.jpg,porn,NSFW
 /workspace/raw_data/porn/8ca1e494a5d8d0119537cba644dbd7cb5e70a37ced3282c9e791d98e4b8aa395.jpg,porn,NSFW
 /workspace/raw_data/hentai/4b99b921bc46265f04afabc063cb46587898221b0f5489e040d43c06c2574919.jpg,hentai,NSFW
@@ -3025,7 +2994,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/4293751.jpg,hentai,NSFW
 /workspace/raw_data/hentai/94524484_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/hentai/5118747.jpg,hentai,NSFW
-/workspace/raw_data/porn/407cf58c8c54664da6f4e643f0b59d04a48068f73da1a7fa055a92a1c78a1243.jpg,porn,NSFW
 /workspace/raw_data/hentai/4725.jpg,hentai,NSFW
 /workspace/raw_data/hentai/2606423.jpg,hentai,NSFW
 /workspace/raw_data/porn/56647adfe22af76a60ac763dcbb77f909592df78da2b21a339f9418c8ee90820.jpg,porn,NSFW
@@ -3095,7 +3063,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/84a1f28492e23f5da09f2ee4eae18272b7b5630a23bfc91d7c4b6e9a9600aa48.jpg,neutral,SFW
 /workspace/raw_data/porn/ed5f1bec628940253ce62ea3c99756345995c50542f4909bea3ce6236e2cdaaa.jpg,porn,NSFW
 /workspace/raw_data/drawings/15f41f97542f428660e5852715871b64605a215c5a78ffa47e52a31e48e23bd5.jpg,drawings,SFW
-/workspace/raw_data/sexy/fa772830e1cd81a3c07ffd9d56a0b5752541f13b0235cc6bcb817c3e1754213b.jpg,sexy,NSFW
 /workspace/raw_data/porn/011b68e3fc5887d04f032a39ccb27eee6160fdf357dffc9846dd1b6c9a8e88ae.jpg,porn,NSFW
 /workspace/raw_data/hentai/5288004.jpg,hentai,NSFW
 /workspace/raw_data/neutral/243f6c987fe8487cbe0995e6fd2bc3c80359793a6c0edec93255c4b54e03996e.jpg,neutral,SFW
@@ -3107,7 +3074,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/44eba9d9a0e735cf5cada66f84d74fb866983930f528ffe51eea4c1f3f5b9dfb.jpg,sexy,NSFW
 /workspace/raw_data/hentai/78636590_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/porn/51a33bc6679657e10e19c81d98723a0adb1c8dfd8c2920e82576df2e0a3e343d.jpg,porn,NSFW
-/workspace/raw_data/sexy/5c31985873ecbdc9c0249a1d27e575c1ce0eb21c333169f5f0bfdf976bb5f78a.jpg,sexy,NSFW
 /workspace/raw_data/porn/76fc78e5d8b8d6569d0110436f369ae6a9df8f0c80028cc713eb3d5216289ee9.jpg,porn,NSFW
 /workspace/raw_data/drawings/d699d9ca4cff4eca9ec277d929d06b6422d17e898593cfd0985536509048e45a.jpg,drawings,SFW
 /workspace/raw_data/drawings/ccc14a71e7a258bce07f9ff664bd395783f51f8cd6ea32358d1fa02deeb2c959.jpg,drawings,SFW
@@ -3270,7 +3236,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/cfcb088c5b25153d2364c9aa89b933d8065029df4aa79f0185e0e8d594ccdf68.jpg,drawings,SFW
 /workspace/raw_data/hentai/9e0cd1884b57841a55e973d024bc91784a2b0012126fe421227d0012df1ecff8.jpg,hentai,NSFW
 /workspace/raw_data/neutral/0520b2e74f65e474d8827f944b1056bc79746651c7e2f229c90a899a9fd31494.jpg,neutral,SFW
-/workspace/raw_data/sexy/91d5a40dbd35fca55c1c35e6d2f269da07a72d5242e69a5ce069476ea383847d.jpg,sexy,NSFW
 /workspace/raw_data/porn/b0db1911a2e2a5b028eba9fb86d4365a3f9a8502213451ecf410c1961920ea9f.jpg,porn,NSFW
 /workspace/raw_data/porn/46020ec3df89a3b46b198370038f61c88e9fb6eb073dffc24f48df681d68fa50.jpg,porn,NSFW
 /workspace/raw_data/hentai/85bcdc75aa9d9b0162377edb7b522b6d215fab7d6b8bea431ccd0fa5cb71c38a.jpg,hentai,NSFW
@@ -3288,7 +3253,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/73441900_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/drawings/992cf8fe64b2225631dc3d49c3153c2bdb2e15fd068dcd0794e0780d6a5dce38.jpg,drawings,SFW
 /workspace/raw_data/hentai/3821549.jpg,hentai,NSFW
-/workspace/raw_data/porn/60f72567d45fe688a06cfd6e0b0a2f851e218e63f9671a7b84a3fbb163c6afb6.jpg,porn,NSFW
 /workspace/raw_data/porn/4ea1525d1e12c0e63d206d326db239f7cfbbe64e0980111cfd7f82e59a4369a8.jpg,porn,NSFW
 /workspace/raw_data/sexy/80724119cfe2897c0302f3a5c4a7cff42bb8a444b6aef084b64331c72bd97937.jpg,sexy,NSFW
 /workspace/raw_data/hentai/87105820_p0_master1200.jpg,hentai,NSFW
@@ -3369,7 +3333,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/fa619b1c3a062f4dfc10c23d98c86a35c42b668f9d81a1f498780b3e272bda53.jpg,sexy,NSFW
 /workspace/raw_data/porn/e1d4cdfd8ac0df34c150b826b366aae3a5295889e7f2d38d6f037880e6c41a4c.jpg,porn,NSFW
 /workspace/raw_data/sexy/5add79bb204d3fdb026c7ce7b80af6fb44d066d17ae66684c5792898d6f10aea.jpg,sexy,NSFW
-/workspace/raw_data/sexy/4e26f11eeb280e4822c20273280ff987c9cfd4febb4dd820c53d4563952abe34.jpg,sexy,NSFW
 /workspace/raw_data/drawings/165127760b93efb766bb9970e9fc9675e87b3aca5abe5db1223f37fc07d27b84.jpg,drawings,SFW
 /workspace/raw_data/drawings/130f221249b7117dd639f068319ee2e722689fd4f9fff020a00bb390fd42c897.jpg,drawings,SFW
 /workspace/raw_data/hentai/1421331.jpg,hentai,NSFW
@@ -3421,7 +3384,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/da424908c1377c8c1119247715f00c2d2d0c4ff8cce17899be650218940b4de5.jpg,porn,NSFW
 /workspace/raw_data/drawings/af75c39b7a8e3fbd86495bdfb71af4baa04b57afc1409e0d9aac93a7db90a8c7.jpg,drawings,SFW
 /workspace/raw_data/drawings/52087c64c2562553e7527eb60547e7712a166baabca4fcfe1c0b647ba7c9646b.jpg,drawings,SFW
-/workspace/raw_data/sexy/21ccc425043814ec3601d2bc575d996c3bfa9fa9bfda57fb93654e6bfc6e63b3.jpg,sexy,NSFW
 /workspace/raw_data/drawings/d7b85b439ccd0f2ed8042eb2d54a6bdbaaaf66c7969d6a0f67e2402d1052dce1.jpg,drawings,SFW
 /workspace/raw_data/sexy/f0c9e8a26db7cf1d4f76b6b994bd17d8af3af6a779a0fb227819af85d62eb0ed.jpg,sexy,NSFW
 /workspace/raw_data/neutral/c3b39e9d6b64abf0ddd3fe3a145ca0716bb18d927bde9248eafc44481615fc23.jpg,neutral,SFW
@@ -3463,7 +3425,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/b6bb8cc2112b4d89f0da031a338a1fd52e20aa5a71a1b3873943ec52a1b826fb.jpg,hentai,NSFW
 /workspace/raw_data/sexy/5678add8e6bcf218659dfe989dcab5801bb6c64f7abe7a3dfb6e8aa58219c25a.jpg,sexy,NSFW
 /workspace/raw_data/drawings/feb8e4028edd2ef9d3b563cf78f56b92c922b569c0d3843474d8e75b81f1aa93.jpg,drawings,SFW
-/workspace/raw_data/sexy/60d40ebfb4ec65d4e05dad2e23d20e7a243d12f4044f45fd5f82321e1d055dd6.jpg,sexy,NSFW
 /workspace/raw_data/porn/1a7a1d9ab2a5beffa7ee7dd4fbf93e69c42c4d687d44987a862761544c9c44a9.jpg,porn,NSFW
 /workspace/raw_data/sexy/ff025b6ba5d64e2668d0ab33abe54afbaa741a6b3e4a83676adb47430645c583.jpg,sexy,NSFW
 /workspace/raw_data/neutral/ae87953df41074b398d335ff4ff6e382c09898c242f46b6613bc0b4405e96164.jpg,neutral,SFW
@@ -3532,7 +3493,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/2d7ccce09a33f1c5deb2d176ba174214f19a6c9e1753a05d0aaedc426361e73d.jpg,drawings,SFW
 /workspace/raw_data/drawings/faec0143ac34efda371aa0490c0927138da41af7ddf0b129f42e4afe83155b1e.jpg,drawings,SFW
 /workspace/raw_data/sexy/2833f0e484f0a790e5e0af9bf37e5cbc03d828f4080b71f5666571473679b763.jpg,sexy,NSFW
-/workspace/raw_data/sexy/af65a1f3aa0c557aa0c7a256c4f00590d3901442738d3b26feb4af8e084b3a7e.jpg,sexy,NSFW
 /workspace/raw_data/neutral/e1c2c81195bef902e3818e5d3b49bc93ba46893b6549929ec769f044c9aae718.jpg,neutral,SFW
 /workspace/raw_data/porn/db35344b636ed1bad3abbe6580412fef258f7e56c115cf3fcf378fedf716041e.jpg,porn,NSFW
 /workspace/raw_data/hentai/77610225_p0_master1200.jpg,hentai,NSFW
@@ -3575,7 +3535,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/50aafed284a9b99ecca3a2a04c4f50baa57b7443f1491c14c99b1fe5ef193116.jpg,neutral,SFW
 /workspace/raw_data/drawings/052544e99e013c182871d6a6bbda0bd0f3011d715834353f9d3cfe35a5fcf0c1.jpg,drawings,SFW
 /workspace/raw_data/drawings/8fab7a1d5cd9d6ff875f0791c638fab56a6d5f4b786e60e6f5015f663524af85.jpg,drawings,SFW
-/workspace/raw_data/drawings/0488680e5067090f4d1899fcefb83ec8bfc173249e5bd1cef8cabf4bf2f837e4.jpg,drawings,SFW
 /workspace/raw_data/hentai/88994998_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/hentai/86903075_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/porn/ec9559e810b557fcb025c829822b9a8afbb07235d715bf35cb1315991b90cefd.jpg,porn,NSFW
@@ -3651,7 +3610,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/68167172_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/neutral/5740b430f8541ba057d25b76f5b21746556daa9438fead4796244743f35a8dbd.jpg,neutral,SFW
 /workspace/raw_data/porn/24252b1ee9561ff1cbea6c09bf8e88ae8ee724842e400c8356ea393f152df003.jpg,porn,NSFW
-/workspace/raw_data/sexy/5e489aaaaac82b678594b323320e3b770a5f4cf4071327d452b3dd9c54226059.jpg,sexy,NSFW
 /workspace/raw_data/hentai/a73f0e4f08fcf99788c7332613d7afb73ff6d0bdf681a9f872778b630a928754.jpg,hentai,NSFW
 /workspace/raw_data/neutral/9818b1b6f1385c62375bd0eb21fe0494c9aa7fc66905a26c6b7b45e71d88e8a9.jpg,neutral,SFW
 /workspace/raw_data/sexy/65402d572fac42e6aa9320686d551bb792d2f2ce1d7edd7c089ffcd5f66d2156.jpg,sexy,NSFW
@@ -3681,12 +3639,10 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/86432380_p1_master1200.jpg,hentai,NSFW
 /workspace/raw_data/drawings/1663d25e3e38005b1d9079a03417c2e6728ab9b42074b9869a83bbe6e00bf187.jpg,drawings,SFW
 /workspace/raw_data/drawings/7d25e230783d0a7d74b9d43f206aac0e50493ef1f8ae0d69298e68e64f711f35.jpg,drawings,SFW
-/workspace/raw_data/porn/a1a9b3376625533faa6b6442a2fed5725d94c462dd9c05bc06b271a57ed787c1.jpg,porn,NSFW
 /workspace/raw_data/sexy/9ef1c78cd1f3ca2b9f986e8a5ee065fdbd8de24f19f494aa47ab0f8b3090efb4.jpg,sexy,NSFW
 /workspace/raw_data/sexy/e851dfab397baa46b2022448d309cb3198d7dd70edb7788e43e2a8cb37c482b4.jpg,sexy,NSFW
 /workspace/raw_data/sexy/b3d934b580d3fec6836026c6f9da9abf9c08a5daa76af38e1a9107b05f290ef5.jpg,sexy,NSFW
 /workspace/raw_data/neutral/8f972b4b5630fbfb8ff695ce789502e36ee6b4e742cb36e3376492713e8b415b.jpg,neutral,SFW
-/workspace/raw_data/sexy/1777a24e95591c0763e78c225db5a21e4904b074a49d3e5562a7b31f5bf5af60.jpg,sexy,NSFW
 /workspace/raw_data/neutral/10d8f0edf9d146f08434049e608fb094d221136a76b6c1e3d71760eae6509bbe.jpg,neutral,SFW
 /workspace/raw_data/porn/3abcf38edb9545a212a23e23d4c4d41ccb4cda8df22b07dd7eb19e115651fc41.jpg,porn,NSFW
 /workspace/raw_data/sexy/174e4c2ec603944d882da5d89d19982920d12c9e6cf8f0a5517dfa87fee08513.jpg,sexy,NSFW
@@ -3713,7 +3669,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/hentai/62394161_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/neutral/b03de01b8a0fea6cf25c5a00718d4336a373bb8d3fb98a08873a43072a234d3e.jpg,neutral,SFW
 /workspace/raw_data/drawings/52308499078a72602eda8577e911ebce05429f90812d1cab5054eb170469a000.jpg,drawings,SFW
-/workspace/raw_data/hentai/8ba3c78fbc3fd44f8593fe0bafbd1522569620e9254b52e9ab9a55d3d462cf8b.jpg,hentai,NSFW
 /workspace/raw_data/neutral/039983653bb96e62b5029bb536e8bc5b5d267e94bc0c84f771cb9675cd5d4cb9.jpg,neutral,SFW
 /workspace/raw_data/sexy/712abfe1605bcdc51c91b20be9d487f5c09d551f81724f706f3fe7d9da09fd60.jpg,sexy,NSFW
 /workspace/raw_data/hentai/71589146_p0_master1200.jpg,hentai,NSFW
@@ -3747,8 +3702,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/drawings/909a44814668faee486f51075faa89f0281dbc5f90cc807039d4328ba63354e1.jpg,drawings,SFW
 /workspace/raw_data/neutral/a45cff52c2cb5c32817a2a474a3d49aa9d2f9c6aa22f91767a9d718f9a5748bd.jpg,neutral,SFW
 /workspace/raw_data/neutral/8b1004421db894a780badb0bf2ee4029c4825c9cc5e78fbf09be0849fe15bdda.jpg,neutral,SFW
-/workspace/raw_data/hentai/a732ed49e2d9888822614f3660a4d8086ddce04502a723f88e6baa9ce77b600d.jpg,hentai,NSFW
-/workspace/raw_data/porn/5622fa6ce46b657a99ca4a2bea3da68b45e5a08c3224366a0c3fcde1dcc27937.jpg,porn,NSFW
 /workspace/raw_data/drawings/8aa8cd682204ca7c982fb9530f21b2df3865d2109cdbd42f5042db21535b0fc2.jpg,drawings,SFW
 /workspace/raw_data/drawings/d592280d433d7079a7bf7ef2ffa8a6fa3221d9d3b914083920d4956fe019b99c.jpg,drawings,SFW
 /workspace/raw_data/sexy/07d3fa33f1a87371a8bca91aa713b4e880727c9b771b99d025c4976a00e6a9b0.jpg,sexy,NSFW
@@ -3835,8 +3788,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/3fc6cfb5cb489b41c680336680a1e1f51157dd07591f06b59738bb4e1b60d0ad.jpg,porn,NSFW
 /workspace/raw_data/drawings/d61b2feea909b4938a9c17cc85b82bea82b445f6f5b1330ddab1a51cd3d639ff.jpg,drawings,SFW
 /workspace/raw_data/porn/3ef0929a44e2d810bd018d0186f181dbedb7f542a2794680ca42a1765c01e365.jpg,porn,NSFW
-/workspace/raw_data/sexy/f3da0e8785b8e613c922b546bbc610dfbdc8dcc915398e501faa0dbd0cf17595.jpg,sexy,NSFW
-/workspace/raw_data/sexy/bf9ebe7b1a4c00bb6e502640720a2428e81e0c24ee77436738815b578bb57f1d.jpg,sexy,NSFW
 /workspace/raw_data/sexy/428a7d392d92326342752766df6cd0e2d3ba6eea6be770b9e983f37f8624ef4e.jpg,sexy,NSFW
 /workspace/raw_data/drawings/6e3d711ab6660c1fdfef9ea3de4514e640c2fc19260289decf9917003fea017a.jpg,drawings,SFW
 /workspace/raw_data/neutral/dff6356fa53e03ca023eed8916fc78a3a8c95b48a122bc9c48fac4686b2b2344.jpg,neutral,SFW
@@ -4011,7 +3962,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/ec52736ea81757799e736cd4689c2b93074367b7b5877b010cd930d1365ad862.jpg,sexy,NSFW
 /workspace/raw_data/neutral/0837bb47624b83b11c0194613f4480d4ed9ac1108950c6fa24f4842a16a5c14f.jpg,neutral,SFW
 /workspace/raw_data/drawings/6a3dde8a695d789e2c89bc45b36e8d9d29783bfbdcf8617c62991c56f7328ffc.jpg,drawings,SFW
-/workspace/raw_data/neutral/30ab9601602a4f586d5e11f4cd9c40458a78ec8bf5ddc6c0c3b21e7f53dd2f2b.jpg,neutral,SFW
 /workspace/raw_data/hentai/4960566.jpg,hentai,NSFW
 /workspace/raw_data/porn/a24814bfb8321153fda642cd901dd110e52ca1a46f39ecbfbf4b40b33e715e61.jpg,porn,NSFW
 /workspace/raw_data/drawings/4acef47a1a9b2afe924df3c5a2dee4c47dfff943b921c254369b2e3bdbba8672.jpg,drawings,SFW
@@ -4035,7 +3985,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/bda26923e23667b95850a9dd85af513e898bfbe82c456751ef395b31ee588223.jpg,porn,NSFW
 /workspace/raw_data/hentai/5708732.jpg,hentai,NSFW
 /workspace/raw_data/hentai/608825.jpg,hentai,NSFW
-/workspace/raw_data/drawings/6590658a7901b76f4aef244267bf7d3fb696cc5473f32cf6a9f6b51d1c160f9e.jpg,drawings,SFW
 /workspace/raw_data/hentai/b1189e8872913d37f216698db8021b89a84203408cfbe0ed076cd919cdf68444.jpg,hentai,NSFW
 /workspace/raw_data/neutral/234a58a331d7324f112df9f398ab54bc40b5e08f1d2e2045f68b745dbb97e5b1.jpg,neutral,SFW
 /workspace/raw_data/drawings/89ddd3d0593e0e4df9ddab33227b7274acfcbd758a07744040cc64ff0904f366.jpg,drawings,SFW
@@ -4127,7 +4076,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/porn/5b23edceb3827c709233cd1e367646fe51757f8aa636b17a2001ea931485a651.jpg,porn,NSFW
 /workspace/raw_data/porn/4dea2c6d8168e7be300171ee57c509ce5c2371c4bcc18c75b5ffa4cb52df26ff.jpg,porn,NSFW
 /workspace/raw_data/neutral/d6a5fadd861f5a2f98c26a2780a97e9f015bcddbdbd04e3adada20ecab5753ab.jpg,neutral,SFW
-/workspace/raw_data/sexy/f5ec7b8a5a11e7ee726f95966cf9bfb7eb02cbe7827ea4474b700a5a736d5df1.jpg,sexy,NSFW
 /workspace/raw_data/hentai/a04046a61f9982fefebf2f65d65347d1b9c8d8d0cf517f2358498a3876a9d72c.jpg,hentai,NSFW
 /workspace/raw_data/drawings/774eb98e9540da684b6524ba094896057b5293fb9e1f9bd4161e542674363834.jpg,drawings,SFW
 /workspace/raw_data/neutral/7754dcfe1395c6f85e9635478912e815f3c1ff1f606b9d2119ae0eb6f875c442.jpg,neutral,SFW
@@ -4154,7 +4102,6 @@ filepath,class_name,binary_label
 /workspace/raw_data/sexy/a2a3d01814f4ee7eb9a7972ffe275b9ebaf3468d7e7eec2796618545e2217546.jpg,sexy,NSFW
 /workspace/raw_data/neutral/3fc9241db899e9892a7ccd1b87c276476d0617b42eb9b8824dedaea505afeab3.jpg,neutral,SFW
 /workspace/raw_data/sexy/a1b199e01ad681fee3d6843d6d7454581ca6a9ea034fdd6da6524566bab123ea.jpg,sexy,NSFW
-/workspace/raw_data/sexy/94db57eeaf71072fd30d17198df4482bd8781f802c6023dee20066faee2b585b.jpg,sexy,NSFW
 /workspace/raw_data/sexy/2c8706465e85b153afc2b4e735054260c808ae2d8428473adcac0c86bdd62170.jpg,sexy,NSFW
 /workspace/raw_data/hentai/377c4ae005bfcc6da529f865a1842cb3669a14824a7493d1810f2790e1d7484a.jpg,hentai,NSFW
 /workspace/raw_data/hentai/e80b204817a503053653f9a72638527b080f628c910e6045357e3dac0a33ab73.jpg,hentai,NSFW
@@ -4193,9 +4140,7 @@ filepath,class_name,binary_label
 /workspace/raw_data/neutral/1b8a975c5b52e7f38dc2e732e547cc318d93526fb4e79d07ea7a1612383aa180.jpg,neutral,SFW
 /workspace/raw_data/hentai/3ea51e54285950dd05c8a5f7856ee6ce86c725da11b5cde0e630cfa2cf1dbe2d.jpg,hentai,NSFW
 /workspace/raw_data/drawings/9ba27499be2b640a1bf60e7be3de1c75aea73d3de2de64afca24ebc8ba0be743.jpg,drawings,SFW
-/workspace/raw_data/sexy/159f28a9fd9e0d64a1407ee54ff26dabb8cb60a57ab1336cde1631523985715b.jpg,sexy,NSFW
 /workspace/raw_data/drawings/430b3f45060ca716b6d6018396d652b94c538ad3f9d4ed27ea7cff0b11c16945.jpg,drawings,SFW
-/workspace/raw_data/porn/e7448aa1e05508d66e24ab100cd024d9356db6b7817258d3bd8e9752d6852c49.jpg,porn,NSFW
 /workspace/raw_data/sexy/73df6cdf6762e4f7c7d7061ae5d3c355edd573a0a825aa77db4adacc0780b657.jpg,sexy,NSFW
 /workspace/raw_data/hentai/93316700_p0_master1200.jpg,hentai,NSFW
 /workspace/raw_data/drawings/42a24cf903065faadc98268c5c73872454d61253fd61a4712d2472c6d503ac88.jpg,drawings,SFW
