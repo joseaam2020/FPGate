@@ -1,0 +1,48 @@
+{
+ "csv": "split/val_holdout.csv",
+ "n_images": 1000,
+ "suite": "frozen",
+ "calib": "quant/calib/calib_stats.json",
+ "score": "low+medium+high>=0.5",
+ "seconds": 1994.8,
+ "configs": {
+  "frozen": {
+   "quantize": [
+    "patch",
+    "qkv",
+    "proj",
+    "fc1",
+    "fc2",
+    "head"
+   ],
+   "percentile": "99.99",
+   "pct_override": {
+    "swiglu_h": "100.0",
+    "proj_out": "100.0",
+    "fc2_out": "100.0",
+    "mlpn_out": "100.0"
+   },
+   "fc2_in_bits": 16
+  }
+ },
+ "summary": {
+  "float": {
+   "acc": 0.954,
+   "fn": 17,
+   "fp": 29,
+   "flips_vs_float": 0,
+   "mean_abs_logit_err": 0.0,
+   "flips_vs_teacher": 0,
+   "logit_err_vs_teacher": 0.0
+  },
+  "frozen": {
+   "acc": 0.956,
+   "fn": 19,
+   "fp": 25,
+   "flips_vs_float": 8,
+   "mean_abs_logit_err": 0.1519322395324707,
+   "flips_vs_teacher": 8,
+   "logit_err_vs_teacher": 0.1519322395324707
+  }
+ }
+}
