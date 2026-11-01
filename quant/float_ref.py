@@ -25,6 +25,7 @@ import torch
 import torch.nn.functional as F
 
 NUM_HEADS = 12
+HEAD_DIM = 64
 NUM_PREFIX = 1
 LN_EPS = 1e-6
 
@@ -73,8 +74,9 @@ def silu(x):
     return x * torch.sigmoid(x)
 
 
-def split_heads(x, heads=NUM_HEADS):
+def split_heads(x, heads=None):
     n, d = x.shape
+    heads = heads or d // HEAD_DIM  # el modelo podado tiene menos de NUM_HEADS cabezas
     return x.reshape(n, heads, d // heads).transpose(0, 1)  # (H, N, hd)
 
 
