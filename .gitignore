@@ -4,3 +4,5 @@ __pycache__/
 *.py[cod]
 reporte_vit/
 analysis/
+quant/ckpt/
+ven/
