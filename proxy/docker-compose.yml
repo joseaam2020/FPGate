@@ -1,0 +1,14 @@
+services:
+  dev:
+    build: ./docker
+    image: fpgate-proxy-dev
+    working_dir: /work/proxy
+    volumes:
+      - ./:/work/proxy
+    # ptrace is needed by ASan/valgrind-style tooling
+    cap_add:
+      - SYS_PTRACE
+    ports:
+      - "8080:8080"
+    tty: true
+    stdin_open: true
