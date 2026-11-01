@@ -1,0 +1,15 @@
+{
+ "seed": 0,
+ "train_csv": "split/train.csv",
+ "n_per_class": 51,
+ "n_images": 255,
+ "percentiles": [
+  99.0,
+  99.9,
+  99.99,
+  100.0
+ ],
+ "device": "cuda",
+ "git_commit": null,
+ "seconds": 148.0
+}
