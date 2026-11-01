@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--n-per-class", type=int, default=51)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="quant/calib", type=Path)
+    ap.add_argument("--ckpt", default=None, help="punto de control podado (quant/ckpt/*.pt)")
     args = ap.parse_args()
     assert "train" in Path(args.train).name, "la calibracion solo usa TRAIN"
 
@@ -92,10 +93,13 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)
 
-    hf = AutoModelForImageClassification.from_pretrained(
-        "Freepik/nsfw_image_detector", torch_dtype=torch.float32).eval()
-    params = float_ref.extract_params(hf.timm_model)
-    del hf
+    if args.ckpt:
+        params = torch.load(args.ckpt, map_location="cpu")["params"]
+    else:
+        hf = AutoModelForImageClassification.from_pretrained(
+            "Freepik/nsfw_image_detector", torch_dtype=torch.float32).eval()
+        params = float_ref.extract_params(hf.timm_model)
+        del hf
 
     # --- pesos INT8: error de cuantizacion por matriz
     qweights = qw.quantize_params(params)

@@ -27,12 +27,36 @@ from transformers import AutoModelForImageClassification
 
 import float_ref
 from calibrate import TIMM_NAME, to_device
+from frozen import frozen_config
 from int_model import KINDS, IntModel, QConfig
 
 INT16_MAX_PCT = {"swiglu_h": "100.0", "proj_out": "100.0", "fc2_out": "100.0"}
 
+def best(name, **kw):
+    """Mejor configuracion de la etapa 1 (ver docs) + banderas de la etapa 2."""
+    return QConfig(percentile="99.99", pct_override={**INT16_MAX_PCT, "mlpn_out": "100.0"},
+                   fc2_in_bits=16, name=name, **kw)
+
+
 SUITES = {
+    "frozen": [frozen_config()],
+    "stage3": [
+        best("s2_all16", int_scores=True, int_softmax=True, int_av=True, int_silu=True),
+        best("s3_int_io", int_scores=True, int_softmax=True, int_av=True, int_silu=True,
+             int_io=True),
+    ],
     "smoke": [QConfig(name="all_p99.9")],
+    "stage2": [
+        best("s1_best"),
+        best("s2_scores", int_scores=True),
+        best("s2_softmax16", int_scores=True, int_softmax=True),
+        best("s2_softmax8", int_scores=True, int_softmax=True, softmax_bits=8),
+        best("s2_av16", int_scores=True, int_softmax=True, int_av=True),
+        best("s2_silu8", int_silu=True),
+        best("s2_silu12", int_silu=True, silu_in_bits=12),
+        best("s2_all16_silu12", int_scores=True, int_softmax=True, int_av=True,
+             int_silu=True, silu_in_bits=12),
+    ],
     "big": [
         QConfig(percentile="99.99", pct_override={**INT16_MAX_PCT, "mlpn_out": "100.0"},
                 fc2_in_bits=16, name="best_fc2in16_max"),
@@ -78,6 +102,7 @@ def main():
     ap.add_argument("--tag", default="eval")
     ap.add_argument("--calib", default="quant/calib/calib_stats.json")
     ap.add_argument("--outdir", default="quant/results", type=Path)
+    ap.add_argument("--ckpt", default=None, help="punto de control podado (quant/ckpt/*.pt)")
     args = ap.parse_args()
     assert "test" not in Path(args.csv).name, "no se usa test para elegir configuraciones"
 
@@ -85,8 +110,10 @@ def main():
     stats = json.load(open(args.calib))
     hf = AutoModelForImageClassification.from_pretrained(
         "Freepik/nsfw_image_detector", torch_dtype=torch.float32).eval()
-    params = to_device(float_ref.extract_params(hf.timm_model), dev)
+    teacher = to_device(float_ref.extract_params(hf.timm_model), dev)   # maestro: original sin podar
     del hf
+    params = to_device(torch.load(args.ckpt, map_location="cpu")["params"], dev) if args.ckpt \
+        else teacher
     tf = create_transform(**resolve_data_config(get_pretrained_cfg(TIMM_NAME).__dict__))
     models = {c.name: IntModel(params, stats, c, dev) for c in SUITES[args.suite]}
 
@@ -94,12 +121,15 @@ def main():
         rows = list(csv.DictReader(f))[: args.n_images]
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    names = ["float"] + list(models)
+    # "teacher" = original sin podar en flotante; "float" = el punto de control en flotante.
+    names = (["teacher"] if args.ckpt else []) + ["float"] + list(models)
     logits = {n: [] for n in names}
     t0 = time.time()
     for i, r in enumerate(rows, 1):
         img = tf(Image.open(r["filepath"]).convert("RGB")).to(dev)
         with torch.inference_mode():
+            if args.ckpt:
+                logits["teacher"].append(float_ref.forward(img, teacher).cpu())
             logits["float"].append(float_ref.forward(img, params).cpu())
             for n, m in models.items():
                 logits[n].append(m.forward(img).cpu())
@@ -117,8 +147,12 @@ def main():
         tn = sum(p == 0 and y == 0 for p, y in zip(pred[n], labels))
         flips = sum(a != b for a, b in zip(pred[n], pred["float"]))
         err = (torch.stack(logits[n]) - torch.stack(logits["float"])).abs().mean().item()
+        ref = "teacher" if args.ckpt else "float"
+        flips_t = sum(a != b for a, b in zip(pred[n], pred[ref]))
+        err_t = (torch.stack(logits[n]) - torch.stack(logits[ref])).abs().mean().item()
         summary[n] = dict(acc=(tp + tn) / len(rows), fn=fn, fp=fp, flips_vs_float=flips,
-                          mean_abs_logit_err=err)
+                          mean_abs_logit_err=err, flips_vs_teacher=flips_t,
+                          logit_err_vs_teacher=err_t)
 
     (args.outdir / f"{args.tag}.json").write_text(json.dumps(dict(
         csv=args.csv, n_images=len(rows), suite=args.suite, calib=args.calib,
@@ -135,10 +169,12 @@ def main():
                        + [f"{v:.6f}" for n in names for v in logits[n][i].tolist()])
 
     print(f"\n{len(rows)} imagenes de {args.csv}")
-    print(f"{'config':22s} {'acc':>7s} {'FN':>4s} {'FP':>4s} {'flips':>6s} {'err logit':>10s}")
+    print(f"{'config':22s} {'acc':>7s} {'FN':>4s} {'FP':>4s} {'flips/flot':>10s} {'err/flot':>9s}"
+          f" {'flips/maest':>11s} {'err/maest':>10s}")
     for n, s in summary.items():
         print(f"{n:22s} {s['acc']*100:6.1f}% {s['fn']:4d} {s['fp']:4d} "
-              f"{s['flips_vs_float']:6d} {s['mean_abs_logit_err']:10.4f}")
+              f"{s['flips_vs_float']:10d} {s['mean_abs_logit_err']:9.4f} "
+              f"{s['flips_vs_teacher']:11d} {s['logit_err_vs_teacher']:10.4f}")
 
 
 if __name__ == "__main__":
