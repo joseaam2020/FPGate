@@ -1,0 +1,156 @@
+#!/bin/bash
+# Image extraction through the proxy (DES-3.2): plain HTTP and intercepted HTTPS.
+# Usage: tests/integration/test_images.sh [binary]
+BIN=${1:-build/asan/fpgate-proxy}
+T=$(mktemp -d)
+fail=0
+PIDS=""
+
+curl() { command curl --max-time 20 "$@"; }
+check() { # name, exit-code
+    if [ "$2" -eq 0 ]; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi
+}
+cleanup() { kill $PIDS 2>/dev/null; wait 2>/dev/null; rm -rf "$T"; }
+trap cleanup EXIT
+
+sha() { sha256sum | cut -d' ' -f1; }
+fsha() { sha256sum "$1" | cut -d' ' -f1; }
+# number of log lines of the first proxy matching a pattern
+count() { grep -c -E "$1" "$T/p1.log"; }
+
+# --- fixtures ---------------------------------------------------------------
+mkdir -p "$T/img"
+python3 - "$T/img" <<'EOF'
+import random, sys
+from PIL import Image, ImageDraw, ImageFilter
+d = sys.argv[1]
+def photo(w, h, seed):
+    r = random.Random(seed)
+    im = Image.frombytes("RGB", (w, h), r.randbytes(w * h * 3)).filter(ImageFilter.GaussianBlur(2))
+    ImageDraw.Draw(im).rectangle([w // 4, h // 4, w // 2, h // 2], fill=(200, 30, 30))
+    return im
+photo(800, 600, 1).save(d + "/photo.jpg", quality=85)
+photo(640, 480, 2).save(d + "/prog.jpg", quality=85, progressive=True)
+photo(1600, 1200, 3).save(d + "/large.jpg", quality=95)
+rgba = photo(300, 200, 4).convert("RGBA"); rgba.putalpha(128); rgba.save(d + "/pic.png")
+photo(200, 200, 5).save(d + "/anim.gif")
+photo(200, 200, 6).save(d + "/pic.webp")
+data = open(d + "/photo.jpg", "rb").read()
+open(d + "/trunc.jpg", "wb").write(data[: len(data) // 2])
+open(d + "/as.bin", "wb").write(data)                  # a JPEG served as octet-stream
+open(d + "/fake.jpg", "wb").write(b"not an image at all " * 200)
+open(d + "/tiny.bin", "wb").write(b"\x01\x02\x03")
+open(d + "/page.txt", "wb").write(b"hello " * 500)
+EOF
+export IMG_DIR="$T/img"
+
+grep -q fpgate.test /etc/hosts 2>/dev/null || echo "127.0.0.1 fpgate.test" >> /etc/hosts
+export FPGATE_CA_PASS=testpass
+sh tools/gen_ca.sh "$T/ca" >/dev/null 2>&1
+printf 'testpass\n' > "$T/pass"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 \
+    -keyout "$T/oca.key" -out "$T/oca.crt" -subj /CN=OriginCA \
+    -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout "$T/o.key" -out "$T/o.csr" -subj /CN=origin 2>/dev/null
+printf 'subjectAltName=IP:127.0.0.1,DNS:fpgate.test\n' > "$T/ext.cnf"
+openssl x509 -req -in "$T/o.csr" -CA "$T/oca.crt" -CAkey "$T/oca.key" -CAcreateserial \
+    -out "$T/o.crt" -days 30 -extfile "$T/ext.cnf" 2>/dev/null
+
+python3 tests/integration/origin.py 18081 & PIDS="$PIDS $!"
+python3 tests/integration/origin.py 18443 "$T/o.crt" "$T/o.key" & PIDS="$PIDS $!"
+$BIN -p 18090 -C "$T/ca/ca.crt" -K "$T/ca/ca.key" -P "$T/pass" -B "$T/oca.crt" 2>"$T/p1.log" & P1=$!
+# Second instance with a 100 KB analysis limit, third with inspection off.
+$BIN -p 18091 -L 100000 2>"$T/p2.log" & P2=$!
+$BIN -p 18092 -N 2>"$T/p3.log" & P3=$!
+PIDS="$PIDS $P1 $P2 $P3"
+sleep 2
+
+H="-x http://127.0.0.1:18090"
+S="-x http://127.0.0.1:18090 --cacert $T/ca/ca.crt"
+O=http://127.0.0.1:18081
+Q=https://fpgate.test:18443
+
+# --- 1. delivery is byte-identical, whatever the framing ----------------------
+for f in photo.jpg prog.jpg pic.png large.jpg; do
+    want=$(fsha "$T/img/$f")
+    for mode in cl chunked close; do
+        got=$(curl -s $H "$O/img/$f?mode=$mode" | sha)
+        [ "$got" = "$want" ]; check "HTTP  $f ($mode) delivered unchanged" $?
+        got=$(curl -s $S "$Q/img/$f?mode=$mode" | sha)
+        [ "$got" = "$want" ]; check "HTTPS $f ($mode) delivered unchanged" $?
+    done
+done
+
+# --- 2. RF-02: every jpg/png is detected and decoded ---------------------------
+jpg=$(count 'IMG host=[^ ]+ kind=jpeg src=(800x600|640x480|1600x1200) .*prep=')
+png=$(count 'IMG host=[^ ]+ kind=png src=300x200 .*prep=')
+[ "$jpg" -eq 18 ]; check "RF-02: 18 JPEG responses detected and decoded (got $jpg)" $?
+[ "$png" -eq 6 ]; check "RF-02: 6 PNG responses detected and decoded (got $png)" $?
+count 'IMG host=fpgate.test' >/dev/null; [ "$(count 'IMG host=fpgate.test')" -eq 12 ]
+check "HTTPS images are attributed to the CONNECT host" $?
+
+# --- 3. wrong or missing headers: the bytes decide ---------------------------------
+before=$(count 'kind=jpeg .*prep=')
+got=$(curl -s $H "$O/img/as.bin" | sha)
+[ "$got" = "$(fsha "$T/img/photo.jpg")" ]; check "JPEG served as octet-stream: delivered" $?
+[ "$(count 'kind=jpeg .*prep=')" -eq $((before + 1)) ]; check "JPEG served as octet-stream: detected by magic bytes" $?
+curl -s $H "$O/img/photo.jpg?ct=none" | cmp -s - "$T/img/photo.jpg"; check "JPEG without Content-Type: delivered" $?
+[ "$(count 'kind=jpeg .*prep=')" -eq $((before + 2)) ]; check "JPEG without Content-Type: detected by magic bytes" $?
+curl -s $H "$O/img/pic.png?ct=image/jpeg" | cmp -s - "$T/img/pic.png"; check "PNG labelled image/jpeg: delivered" $?
+[ "$(count 'kind=png src=300x200 .*prep=')" -eq 7 ]; check "PNG labelled image/jpeg: decoded as PNG (magic wins)" $?
+
+# --- 4. things that are not decodable pass through, and are accounted for ---------
+curl -s $H "$O/img/anim.gif" | cmp -s - "$T/img/anim.gif"; check "GIF delivered unchanged" $?
+curl -s $H "$O/img/pic.webp" | cmp -s - "$T/img/pic.webp"; check "WebP delivered unchanged" $?
+[ "$(count 'kind=other .*error=unsupported_format')" -eq 2 ]; check "GIF and WebP logged as unsupported formats" $?
+curl -s $H "$O/img/trunc.jpg" | cmp -s - "$T/img/trunc.jpg"; check "truncated JPEG delivered unchanged" $?
+[ "$(count 'kind=jpeg .*error=corrupt')" -ge 1 ]; check "truncated JPEG logged as corrupt" $?
+curl -s $H "$O/img/fake.jpg" | cmp -s - "$T/img/fake.jpg"; check "image/jpeg that is not an image: delivered" $?
+[ "$(count 'error=not_an_image')" -ge 1 ]; check "image/jpeg that is not an image: logged" $?
+
+# --- 5. responses that must not be touched ------------------------------------------
+curl -s $H "$O/img/page.txt" | cmp -s - "$T/img/page.txt"; check "text/plain delivered unchanged" $?
+curl -s $H "$O/img/tiny.bin" | cmp -s - "$T/img/tiny.bin"; check "3-byte octet-stream delivered unchanged" $?
+h=$(curl -s -I $H "$O/img/photo.jpg"); echo "$h" | grep -qi '^content-length: '; check "HEAD answers with headers and no body (no hang)" $?
+code=$(curl -s -o /dev/null -w '%{http_code}' $H "$O/img/photo.jpg?status=304"); [ "$code" = 304 ]; check "304 passes" $?
+before=$(count 'IMG ')
+curl -s $H "$O/img/photo.jpg?status=206" | cmp -s - "$T/img/photo.jpg"; check "206 partial content delivered unchanged" $?
+[ "$(count 'IMG ')" -eq "$before" ]; check "206 is not analysed (policy: pass without analysis)" $?
+curl -s $H "$O/img/photo.jpg?enc=gzip" | cmp -s - "$T/img/photo.jpg"; check "Content-Encoding image delivered unchanged" $?
+[ "$(count 'IMG ')" -eq "$before" ]; check "Content-Encoding image is not analysed" $?
+
+# --- 6. keep-alive: many responses on one intercepted connection --------------------
+n0=$(count 'IMG ')
+out=$(curl -s $S "$Q/img/photo.jpg" "$Q/echo" "$Q/img/pic.png?mode=chunked" "$Q/img/prog.jpg" "$Q/chunked" | sha)
+want=$( { cat "$T/img/photo.jpg"; echo; } >/dev/null; \
+        { cat "$T/img/photo.jpg"; \
+          curl -s $S "$Q/echo"; cat "$T/img/pic.png"; cat "$T/img/prog.jpg"; printf 'hello chunked world'; } | sha)
+[ "$out" = "$want" ]; check "keep-alive: image, text, chunked image, image, chunked text in one tunnel" $?
+[ "$(count 'IMG ')" -eq $((n0 + 3)) ]; check "keep-alive: the three images in that tunnel were all analysed" $?
+
+# --- 7. the reactor is not blocked while an image is held ------------------------------
+curl -s $H "$O/img/photo.jpg?slow=1" -o "$T/slow.out" & SLOW=$!
+sleep 0.7
+t=$(curl -s -o /dev/null -w '%{time_total}' $H "$O/echo")
+ok=$(awk -v t="$t" 'BEGIN { print (t < 0.5) ? 0 : 1 }')
+[ "$ok" -eq 0 ]; check "other traffic is not delayed by a held image (echo took ${t}s)" $?
+wait $SLOW
+cmp -s "$T/slow.out" "$T/img/photo.jpg"; check "the slowly delivered image arrives intact" $?
+
+# --- 8. limits and switches -----------------------------------------------------------------
+H2="-x http://127.0.0.1:18091"
+curl -s $H2 "$O/img/large.jpg" | cmp -s - "$T/img/large.jpg"; check "image over -L limit delivered unchanged" $?
+! grep -q 'IMG ' "$T/p2.log"; check "image over -L limit is streamed, not analysed" $?
+H3="-x http://127.0.0.1:18092"
+curl -s $H3 "$O/img/photo.jpg?mode=chunked" | cmp -s - "$T/img/photo.jpg"; check "-N: image delivered unchanged" $?
+! grep -q 'IMG ' "$T/p3.log"; check "-N: no inspection at all" $?
+
+# --- 9. ambiguous framing is refused, not guessed ----------------------------------------------
+curl -s $H "$O/img/photo.jpg?mode=smuggle" -o "$T/sm.out"; rc=$?
+{ [ $rc -ne 0 ] || ! cmp -s "$T/sm.out" "$T/img/photo.jpg"; }; check "Content-Length + Transfer-Encoding: connection refused" $?
+grep -q 'framing error' "$T/p1.log"; check "framing error logged" $?
+
+kill -0 $P1 2>/dev/null; check "proxy still alive" $?
+if grep -E "AddressSanitizer|runtime error|LeakSanitizer" "$T"/p*.log; then echo "FAIL sanitizer report"; fail=1; fi
+exit $fail

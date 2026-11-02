@@ -51,6 +51,55 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 
 > **Nota para el desarrollo de `fpgate-accel`**: el mock es la referencia ejecutable del contrato y `src/accel_proto.h` es la fuente de verdad del formato. Si el formato cambia, se cambia primero en `accel_proto.h` y luego en el mock y en sus pruebas. Al empezar `fpgate-accel` se puede usar `tests/mock_accel/test_mock_accel.py` como especificacion de comportamiento. Hoy ese test arranca el mock por su cuenta; para ejecutarlo contra el servidor real habria que anadirle una opcion `--socket` y omitir las pruebas que dependen de la configuracion del mock (`fail=*`, `score_from_pixels`, latencia). Las comprobaciones reutilizables tal cual son: formato en el cable, eco del `request_id`, rechazo con `UNSUPPORTED` (version, tamano, formato de pixel) y respuesta al mensaje `status`.
 
+## DES-3.2 Extraccion de imagenes (2026-11-02)
+
+**Flujo** (`src/http_stream.c`, `src/inspect.c`, `src/image_detect.c`, `src/image_prep.c`, `src/resample.c`): en HTTP en claro y en el lado descifrado de un tunel interceptado, el proxy analiza el framing HTTP/1.1 de cada respuesta (Content-Length, chunked con extensiones y trailers, cierre de conexion, HEAD/204/304/1xx, keep-alive, pipelining). Todo lo que no es imagen se reenvia de inmediato y sin cambios. Una respuesta 200 con imagen se retiene hasta completarla, se decodifica, se preprocesa y se entrega **identica byte a byte** (hoy; en DES-3.3 el veredicto de `fpgate-accel` decide entre eso y la sustitucion).
+
+**Deteccion**: `Content-Type` image/* (salvo svg) -> se retiene; ausente u `octet-stream` -> se retiene hasta ver 12 bytes y se decide por magic bytes; cualquier otro tipo -> no se mira. **Los magic bytes mandan** sobre la cabecera (un PNG etiquetado image/jpeg se decodifica como PNG). Limite conocido: una imagen mal etiquetada como `text/*` o similar no se detecta.
+
+**Equivalencia con el entrenamiento** (el modelo usa `Image.open().convert("RGB")` + transformacion eval de timm: lado corto a 448 con bicubic + CenterCrop):
+- `resample.c` reproduce el `ImagingResample` de Pillow (coeficientes bicubicos a=-0.5 en punto fijo de 22 bits, pasada horizontal y luego vertical, redondeo a 8 bits entre ambas). `tests/unit/test_prep.py` compara contra Pillow: **identico byte a byte** en 36 casos (JPEG baseline/progresivo/4:4:4/4:2:2/gris, PNG RGB/RGBA/L/LA/paleta/1 bit/Adam7; 448 crop y 224 squash; escalado, identidad y aspectos extremos). x86 y ARM+NEON dan el mismo resultado.
+- Se imita `convert("RGB")`: el alfa se descarta sin componer, se ignoran gamma/ICC/orientacion EXIF, PNG de 16 bits se trunca a 8.
+- Los coeficientes se calculan con `-ffp-contract=off` para que ninguna arquitectura los altere.
+- **Por confirmar con el modelo**: que `crop_pct` de la configuracion de timm sea 1.0 y el modo de recorte sea `center` (ejecutar `model/vit_eval.py`, que imprime "Pipeline de transformaciones"). Si no, cambia `-S`/`-Q` o se ajusta `rs_new`.
+- `-D` (escalado DCT de libjpeg, 1/2, 1/4, 1/8) acelera la decodificacion de fotos grandes pero **no es identico** al flujo de entrenamiento (diferencia media < 3 niveles en la prueba); queda apagado por defecto hasta medir su efecto en la exactitud.
+
+**Politicas (decisiones #6 y #8, provisionales)**
+
+| Caso | Hoy | Contador |
+|---|---|---|
+| JPEG/PNG valido | decodificado y preprocesado, entregado | `decoded` |
+| JPEG/PNG danado o truncado | entregado, registrado como `corrupt` (no como bloqueo) | `corrupt` |
+| GIF, WebP, AVIF/HEIC, BMP | entregado, `unsupported_format` | `unsupported_format` |
+| JPEG CMYK/YCCK o de 12 bits | entregado, `unsupported_format` | `unsupported_format` |
+| Mas de 16 MP (`max_pixels`) | entregado, `too_many_pixels` | `too_many_pixels` |
+| Mayor que `-L` (8 MiB) | se transmite sin retener | `skipped_oversize` |
+| Presupuesto global de retencion (64 MiB) agotado | se transmite sin retener | `skipped_budget` |
+| 206 Partial Content | se transmite sin analizar | `skipped_partial` |
+| `Content-Encoding` distinto de identity | se transmite sin analizar | `skipped_encoded` |
+| Content-Length + Transfer-Encoding, longitudes contradictorias, chunk mal formado | **se cierra la conexion** (un parser que discrepa del navegador permitiria colar imagenes) | - |
+
+**Abierto**: ninguno de estos casos *bloquea* todavia; en DES-3.3 hay que decidir si WebP/GIF/AVIF y las imagenes danadas se bloquean (fail-closed, rompe muchos sitios porque WebP es muy comun) o se dejan pasar (hueco de contenido). Mi recomendacion: configurable, con "permitir" por defecto para formatos no soportados y "bloquear" para danadas. Decision de producto, no tecnica.
+
+**Memoria y RS-01**: las imagenes retenidas viven en buffers que se copian y se borran con `explicit_bzero` al crecer y al liberar; lo mismo con filas y pixeles temporales en los decodificadores. Nada se escribe a disco. El redimensionado se hace fila a fila mientras se decodifica, asi que una foto de 24 MP no necesita su RGB completo (solo `alto x 448 x 3` bytes).
+
+**Tiempos medidos en la placa** (2026-11-02, Cortex-A9 con NEON, binario estatico musl, salida 448 crop, `prep_tool`):
+
+| Imagen | Decodificar + redimensionar | Con `-D` |
+|---|---|---|
+| JPEG 1280x575, 216 KB | 92 ms | - |
+| PNG 800x600 RGBA, 219 KB | 118 ms | - |
+| JPEG 3840x1725, 1.5 MB | 537 ms | 277 ms |
+
+Por el proxy, JPEG 1280x575 por HTTPS interceptado: `prep=92.0ms` en el log, 200 en 1.06 s totales de punta a punta (incluye handshakes y la descarga desde internet). La resolucion y el codec dominan: extrapolando por pixeles, una foto de 16 MP (el tope) tardaria ~1.3 s exacta y ~0.7 s con `-D`.
+
+**Limitaciones que quedan**
+- La decodificacion corre **dentro del reactor** y bloquea el resto de conexiones mientras dura: 90-540 ms para imagenes tipicas y hasta ~1.3 s en el peor caso permitido, contra los 500 ms de RR-03 para el trafico sin imagenes. **Hay que moverla a un hilo de trabajo antes de DES-3.3** (el HPS tiene 2 nucleos, pero `fpgate-accel` tambien usa CPU del HPS para las operaciones por fila).
+- Un JPEG progresivo grande necesita sus coeficientes en memoria (limite de libjpeg: 96 MB).
+- Sin pipelining >32 solicitudes en vuelo (pasa a opaco sin analizar), sin HTTP/2 (ALPN lo impide).
+- El presupuesto de retencion es global y fijo (64 MiB); la concurrencia maxima de imagenes en vuelo no esta limitada de otra forma (decision #8 sigue abierta en este punto).
+- Fuzzing del detector, del framing y de los decodificadores: pendiente.
+
 ## #2 Parser HTTP — CERRADA: picohttpparser
 
 - Vendorizado en `third_party/picohttpparser` (commit en `COMMIT`). Un solo .c/.h, sin dependencias, parsing incremental (`-2` = incompleto).

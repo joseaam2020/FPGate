@@ -16,6 +16,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "buf.h"
+#include "http_stream.h"
+#include "inspect.h"
 #include "picohttpparser.h"
 #include "tls_mitm.h"
 
@@ -25,52 +28,6 @@
 #define IDLE_SECS     60
 #define MAX_CONNS     1024
 #define HOST_MAX      256
-
-/* ---- growable output buffer ------------------------------------------- */
-
-typedef struct {
-    char *p;
-    size_t len, off, cap;
-} buf_t;
-
-static size_t buf_pending(const buf_t *b) { return b->len - b->off; }
-
-static int buf_append(buf_t *b, const void *d, size_t n)
-{
-    if (b->off == b->len)
-        b->off = b->len = 0;
-    if (b->len + n > b->cap) {
-        size_t nc = b->cap ? b->cap : 4096;
-        while (nc < b->len + n)
-            nc *= 2;
-        char *np = realloc(b->p, nc);
-        if (!np)
-            return -1;
-        b->p = np;
-        b->cap = nc;
-    }
-    memcpy(b->p + b->len, d, n);
-    b->len += n;
-    return 0;
-}
-
-static int buf_printf(buf_t *b, const char *fmt, ...)
-{
-    char tmp[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(tmp, sizeof tmp, fmt, ap);
-    va_end(ap);
-    if (n < 0 || (size_t)n >= sizeof tmp)
-        return -1;
-    return buf_append(b, tmp, (size_t)n);
-}
-
-static void buf_free(buf_t *b)
-{
-    free(b->p);
-    memset(b, 0, sizeof *b);
-}
 
 /* ---- connections ------------------------------------------------------ */
 
@@ -103,6 +60,8 @@ typedef struct conn {
     int hs_done;
     int hs_want;                    /* TLS_WANT_READ / TLS_WANT_WRITE */
     char host[HOST_MAX];            /* client only: CONNECT target host */
+    inspect_t *insp;                /* HTTP-aware relay for the pair; NULL = opaque bytes */
+    int insp_owner;                 /* the upstream side frees it */
     int dead;
     uint32_t events;
     time_t last;
@@ -196,6 +155,8 @@ static void reap_dead(void)
         buf_free(&c->out);
         free(c->hdr);
         tls_free(c->tls);
+        if (c->insp_owner)
+            inspect_free(c->insp);
         free(c);
     }
 }
@@ -330,6 +291,7 @@ static int handle_request_head(conn_t *c)
     char host[HOST_MAX], port[8];
     buf_t head = {0};
     int is_connect = method_len == 7 && memcmp(method, "CONNECT", 7) == 0;
+    int is_head = method_len == 4 && memcmp(method, "HEAD", 4) == 0;   /* method points into c->hdr, freed below */
     const char *target_path = "/";
     size_t target_path_len = 1;
 
@@ -446,6 +408,12 @@ static int handle_request_head(conn_t *c)
     c->peer = u;
     u->peer = c;
     c->state = ST_CONNECTING;
+    snprintf(c->host, sizeof c->host, "%s", host);
+    if (!c->tunnel) {
+        /* Plain HTTP: the proxy wrote the request itself, so only the response is parsed. */
+        u->insp = c->insp = inspect_new(host, 0, is_head ? HS_METHOD_HEAD : HS_METHOD_OTHER);
+        u->insp_owner = u->insp != NULL;
+    }
     set_events(u, EPOLLOUT, 1);
     update_events(c);
     fprintf(stderr, "%s %s:%s\n", is_connect ? "CONNECT" : "HTTP", host, port);
@@ -575,24 +543,52 @@ static int relay_read_once(conn_t *c)
     }
     c->last = time(NULL);
     conn_t *p = c->peer;
-    if (n == 0) {
-        c->eof = 1;
-        update_events(c);
-        check_done(c);
-        return 0;
+    int eof = n == 0;
+    buf_t fwd = {0};
+    const char *data = tmp;
+    size_t len = (size_t)n;
+
+    /* HTTP-aware pairs go through the inspector, which decides what travels now. */
+    if (c->insp && eof && !c->is_client) {
+        (void)inspect_response_eof(c->insp, &fwd);          /* releases anything held */
+        data = fwd.p;
+        len = buf_pending(&fwd);
+    } else if (c->insp && !eof && (!c->is_client || inspect_wants_requests(c->insp))) {
+        int rc = c->is_client ? inspect_request(c->insp, tmp, (size_t)n, &fwd)
+                              : inspect_response(c->insp, tmp, (size_t)n, &fwd);
+        if (rc < 0) {
+            fprintf(stderr, "HTTP framing error on %s, closing\n", conn_host(c));
+            buf_wipe_free(&fwd);
+            pair_kill(c);
+            return 0;
+        }
+        data = fwd.p;
+        len = buf_pending(&fwd);
     }
+
     size_t off = 0;
-    if (!buf_pending(&p->out)) {
-        ssize_t s = conn_send(p, tmp, (size_t)n);
+    if (len && !buf_pending(&p->out)) {
+        ssize_t s = conn_send(p, data, len);
         if (s == IO_ERR) {
+            buf_wipe_free(&fwd);
             pair_kill(c);
             return 0;
         }
         if (s > 0)
             off = (size_t)s;
     }
-    if (off < (size_t)n && buf_append(&p->out, tmp + off, (size_t)n - off) != 0) {
+    if (off < len && buf_append(&p->out, data + off, len - off) != 0) {
+        buf_wipe_free(&fwd);
         pair_kill(c);
+        return 0;
+    }
+    buf_wipe_free(&fwd);
+
+    if (eof) {
+        c->eof = 1;
+        update_events(p);
+        update_events(c);
+        check_done(c);
         return 0;
     }
     if (buf_pending(&p->out) > OUT_HIGH)
@@ -663,6 +659,11 @@ static void advance_hs(conn_t *x)
         update_events(x);
         return;
     }
+    /* Both sides are decrypted: from here on the pair is plain HTTP/1.1. */
+    conn_t *cl = x->is_client ? x : p, *up = x->is_client ? p : x;
+    up->insp = cl->insp = inspect_new(cl->host, 1, HS_METHOD_OTHER);
+    up->insp_owner = up->insp != NULL;
+
     x->state = p->state = ST_RELAY;
     update_events(x);
     update_events(p);
