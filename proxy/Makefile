@@ -45,7 +45,12 @@ build/ubsan/fpgate-proxy: $(SRC) $(HDR)
 	@mkdir -p $(@D)
 	$(CC) $(COMMON) -O1 -g -fsanitize=undefined -fno-sanitize-recover=undefined $(filter %.c,$^) $(LINK) -o $@
 
-test: asan
+build/proto_dump: tests/unit/proto_dump.c src/accel_proto.h
+	@mkdir -p $(@D)
+	$(CC) $(CSTD) $(WARN) -Isrc $< -o $@
+
+test: asan build/proto_dump
+	python3 tests/mock_accel/test_mock_accel.py build/proto_dump
 	bash tests/integration/test_http.sh build/asan/fpgate-proxy
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 

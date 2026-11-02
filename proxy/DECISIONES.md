@@ -20,6 +20,37 @@ Registro de decisiones. Formato: contexto, decision, estado.
 - El binario ARM es **estatico** para no depender de la glibc de la placa.
 - Despliegue: `scp -O build/arm/fpgate-proxy root@192.168.50.2:/home/root/fpgate-proxy` (`-O` y ruta con nombre completo: el scp remoto es antiguo).
 
+## #3, #4, #5 Contrato `classify` — CERRADAS (2026-11-02)
+
+Definicion en `src/accel_proto.h`; el mock (`tests/mock_accel/mock_accel.py`) y `tests/mock_accel/test_mock_accel.py` verifican byte a byte que C y Python coinciden.
+
+**Reparto de responsabilidades**
+- El proxy decodifica la imagen, la redimensiona a la resolucion que pida el acelerador y envia **RGB uint8 (HWC)**.
+- `fpgate-accel` normaliza, cuantiza a INT8, coloca los datos en DDR3, maneja CSR/DMA y las operaciones del HPS. Todo lo especifico del modelo (media/desviacion, escalas, clases que forman el score) vive ahi, junto al codigo de entrenamiento y cuantizacion: la poda y la cuantizacion en curso no tocan el proxy.
+- El acelerador **no decide**: devuelve `score_nsfw`. El umbral (RF-09) y la politica ante fallas (RF-14) son del proxy.
+- Resolucion (#4): no esta fijada en el proxy; viaja en la cabecera y se configura. Valor por defecto del mock: 224.
+- Normalizacion (#5): sale del proxy. Lo que queda en el proxy es el **metodo de interpolacion del redimensionado**, que debe coincidir con el entrenamiento; no sera identico byte a byte a PIL, la prueba de DES-3.2 usara una tolerancia documentada.
+
+**Mensajes** (socket Unix, little-endian, cabecera fija de 24 bytes, version 1)
+
+| Peticion `FPGA` | | Respuesta `FPGR` | |
+|---|---|---|---|
+| magic | 4 | magic | 4 |
+| version, tipo (1 classify, 2 status), canales, formato (0 = RGB8 HWC) | 4 x u8 | version, tipo, estado, reservado | 4 x u8 |
+| request_id | u32 | request_id | u32 |
+| ancho, alto | 2 x u16 | score_nsfw | f32 |
+| payload_len | u32 | hw_cycles | u32 |
+| reservado | u32 | latency_us | u32 |
+
+Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no aceptado), `DEGRADED`. Si el estado no es OK el score no es valido y el proxy aplica la politica por defecto.
+
+**Por que `request_id`**: con latencias de 3-7 s, si el proxy vence el timeout y reutiliza la conexion, una respuesta tardia podria entregarse como si fuera de la imagen siguiente. El proxy descarta respuestas cuyo id no coincide.
+**Por que `status`**: permite probar el acelerador para salir del modo degradado sin arriesgar una imagen real.
+
+**Mock**: procesa una imagen a la vez (como el motor GEMM); score fijo o `score_from_pixels` (imagen blanca = 1.0), latencia configurable, fallas `error` / `close` / `hang`, configuracion JSON releida en cada peticion (se puede cambiar con el proxy corriendo) y bitacora con id, tamano y sha256 de los pixeles (nunca los pixeles) para verificar RF-03.
+
+> **Nota para el desarrollo de `fpgate-accel`**: el mock es la referencia ejecutable del contrato y `src/accel_proto.h` es la fuente de verdad del formato. Si el formato cambia, se cambia primero en `accel_proto.h` y luego en el mock y en sus pruebas. Al empezar `fpgate-accel` se puede usar `tests/mock_accel/test_mock_accel.py` como especificacion de comportamiento. Hoy ese test arranca el mock por su cuenta; para ejecutarlo contra el servidor real habria que anadirle una opcion `--socket` y omitir las pruebas que dependen de la configuracion del mock (`fail=*`, `score_from_pixels`, latencia). Las comprobaciones reutilizables tal cual son: formato en el cable, eco del `request_id`, rechazo con `UNSUPPORTED` (version, tamano, formato de pixel) y respuesta al mensaje `status`.
+
 ## #2 Parser HTTP — CERRADA: picohttpparser
 
 - Vendorizado en `third_party/picohttpparser` (commit en `COMMIT`). Un solo .c/.h, sin dependencias, parsing incremental (`-2` = incompleto).
