@@ -25,9 +25,31 @@ Registro de decisiones. Formato: contexto, decision, estado.
 - Vendorizado en `third_party/picohttpparser` (commit en `COMMIT`). Un solo .c/.h, sin dependencias, parsing incremental (`-2` = incompleto).
 - No cubre chunked: el decoder de chunked se escribe aparte cuando se necesite reensamblar cuerpos de imagen (DES-3.2).
 
-## #1 Biblioteca TLS — ABIERTA
+## #1 Biblioteca TLS — CERRADA: mbedTLS 3.6.4
 
-- OpenSSL 3.x o mbedTLS compilada estatica para ARM. Decidir tras prototipo en la placa (memoria, tiempo de handshake, generacion de certificados al vuelo).
+Medicion en la placa (2026-11-02, 10 corridas, `curl` a https://example.com/, conexion nueva, PC -> placa por router): directo mediana 0.231 s; por el proxy mediana 0.408 s (rango 0.392-0.423 s). Latencia agregada ~177 ms por conexion HTTPS nueva, bajo el limite de 500 ms de RR-03. Limites de la medicion: un solo host cercano (CDN), sin imagenes, una conexion a la vez, sin medir memoria.
+
+- mbedTLS 3.6.4 LTS (sha256 fijado en el Dockerfile), compilada dos veces: nativa y musl-ARM, enlazada estaticamente. Binario ARM de ~0.9 MB con TLS.
+- Soporta TLS 1.2/1.3 en ambos roles y escritura de certificados X.509 (generacion de hojas al vuelo). OpenSSL de la placa (1.0.1p) no se usa.
+- Verificado en la placa (2026-11-02): `curl --cacert ca.crt -x http://<placa>:8080 https://example.com/` -> 200, hoja emitida por `FPGate CA`, hostname validado. Tiempo total ~0.65 s (hoja nueva) y ~0.61 s (hoja cacheada), con ~56 ms de RTT a internet: generar la hoja no es el cuello de botella; falta separar el costo del proxy (handshake con cliente y con servidor) del costo de la red para evaluar RR-03.
+- Pendiente de medir: memoria (RSS) con varias conexiones. Si algo no cumple se reevalua OpenSSL 3.x / wolfSSL.
+
+### Diseno del MITM (src/tls_mitm.c, src/proxy.c)
+
+- Tras el `200 Connection Established` se espera el primer byte del cliente (estado SNIFF): `0x16 0x03` = ClientHello -> se intercepta; cualquier otra cosa, o si el servidor habla primero (SSH, SMTP...), tunel ciego.
+- Dos sesiones independientes (cliente<->proxy, proxy<->servidor); los handshakes corren en paralelo y el relay empieza cuando ambos terminan.
+- Hoja por **host del CONNECT** (no por SNI): funciona tambien para destinos por IP, que no envian SNI. ECDSA P-256, una sola clave para todas las hojas, SAN (DNS o IP), EKU serverAuth, validez 7 dias (notBefore = ahora - 1 dia), cache LRU de 128 entradas (se guarda el DER; cada sesion parsea su copia).
+- Hacia el servidor: TLS >= 1.2, verificacion obligatoria contra el bundle (`-B`, por defecto `/etc/fpgate/ca-bundle.pem`), hostname verificado, ALPN solo `http/1.1`. Hacia el cliente: TLS 1.2 y 1.3; 1.1 recibe alerta `protocol_version`.
+- CA: EC P-256, clave cifrada con contrasena (PKCS#8). La contrasena se lee de `-P archivo` o `$FPGATE_CA_PASS`, y se borra de memoria tras cargar la clave. Se avisa si la clave tiene permisos distintos de 600.
+- RS-07: la CA se revalida cada 60 s; si esta vencida o aun no es valida, se deja de interceptar y todo HTTPS pasa por tunel ciego.
+
+### Pendientes / riesgos de TLS
+
+- **Reloj de la placa**: arrancaba en 2017. Sin hora correcta las hojas no validan en el cliente y los certificados de los servidores reales fallan la verificacion. El proxy avisa si la hora es anterior a la fecha de compilacion; hay que sincronizar con NTP (o `date -s`) y decidir donde vive la hora en el producto (RTC/NTP).
+- Si el cliente rechaza la hoja (CA no instalada, certificate pinning, Firefox con su propio almacen) el handshake falla y la conexion se cierra; aun no hay lista de excepciones para pasar ese host a tunel ciego en el siguiente intento.
+- Sin reanudacion de sesiones, sin pool upstream, sin OCSP/CRL de los servidores.
+- La clave de la CA y el archivo de contrasena viven en `/etc/fpgate/` con modo 600 (decision de entrega de contrasena aun por cerrar: archivo 600 vs. ingreso interactivo).
+- Probado con ASan/UBSan: 15 pruebas TLS (`tests/integration/test_tls.sh`). Falta prueba de CA vencida (RS-07) y fuzzing.
 
 ## Pendientes tecnicos conocidos de la etapa HTTP en claro
 

@@ -1,10 +1,13 @@
 """Tiny origin server used by the integration tests.
 
+usage: origin.py PORT [CERT KEY]    (TLS when CERT and KEY are given)
+
 /echo     -> 200, body is the request head as received (headers preserved?)
 /chunked  -> 200, Transfer-Encoding: chunked
 /big      -> 200, 3 MiB body of a repeating pattern (streaming / backpressure)
 /post     -> echoes the POST body
 """
+import ssl
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -44,4 +47,9 @@ class H(BaseHTTPRequestHandler):
         self._send(self.rfile.read(n))
 
 
-ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+srv = ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H)
+if len(sys.argv) == 4:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(sys.argv[2], sys.argv[3])
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+srv.serve_forever()
