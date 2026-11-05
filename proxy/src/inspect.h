@@ -12,8 +12,13 @@
  *
  *  - everything that is not an image streams through untouched and at once;
  *  - a 200 response that is an image is held back until complete, decoded and
- *    preprocessed, then delivered unchanged. In DES-3.3 the verdict of
- *    fpgate-accel decides between that and a substitute.
+ *    preprocessed on a worker thread, then delivered unchanged. In DES-3.3 the
+ *    verdict of fpgate-accel decides between that and a substitute.
+ *
+ * While an image is being processed the pair is "busy": the owner must stop
+ * reading from the server (bytes already read are kept behind the image, in
+ * order) and must not close the pair. When the worker is done,
+ * inspect_collect() hands the bytes to forward through a callback.
  *
  * Held images are bounded per image and globally, and zeroed when released.
  */
@@ -23,13 +28,15 @@ typedef struct {
     size_t max_bytes;           /* largest image analysed; bigger ones stream */
     size_t budget_bytes;        /* total held across all connections */
     prep_cfg_t prep;
+    int workers;                /* decode threads; 0 decodes inline in the event loop */
+    unsigned delay_ms;          /* test hook: extra delay per decode job */
 } inspect_cfg_t;
 
 typedef struct {
     unsigned long seen;         /* image responses held for analysis */
     unsigned long decoded;
     unsigned long corrupt, unsupported_format, too_many_pixels, not_an_image;
-    unsigned long skipped_oversize, skipped_budget, skipped_encoded, skipped_partial;
+    unsigned long skipped_oversize, skipped_budget, skipped_encoded, skipped_partial, skipped_busy;
     double prep_ms_total, prep_ms_max;
 } inspect_stats_t;
 
@@ -47,6 +54,8 @@ typedef struct inspect inspect_t;
  */
 inspect_t *inspect_new(const char *host, int track_requests, int first_method);
 void inspect_free(inspect_t *i);
+/* Opaque pointer handed back to the inspect_collect() callback. */
+void inspect_set_ctx(inspect_t *i, void *ctx);
 
 /* Bytes going client -> server. Forwardable bytes are appended to `out`. */
 int inspect_request(inspect_t *i, const char *p, size_t n, buf_t *out);
@@ -56,5 +65,16 @@ int inspect_response(inspect_t *i, const char *p, size_t n, buf_t *out);
 int inspect_response_eof(inspect_t *i, buf_t *out);
 /* 1 when the client->server direction must also pass through inspect_request(). */
 int inspect_wants_requests(const inspect_t *i);
+/* 1 while an image of this pair is being decoded on a worker. */
+int inspect_busy(const inspect_t *i);
+
+/*
+ * Collects finished decode jobs. For each one whose pair is still alive,
+ * `ready` receives the bytes to forward to the client (the released image and
+ * whatever queued behind it) and `error` is non-zero if the pair must be
+ * closed. Call when the pool's eventfd is readable.
+ */
+typedef void (*inspect_ready_fn)(void *ctx, buf_t *out, int error);
+void inspect_collect(inspect_ready_fn ready);
 
 #endif

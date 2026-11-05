@@ -23,7 +23,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-p port] [-C ca.crt -K ca.key [-P passfile] [-B bundle.pem]]\n"
-            "          [-S size] [-Q] [-D] [-L max_bytes] [-N] [-v]\n"
+            "          [-S size] [-Q] [-D] [-L max_bytes] [-W workers] [-N] [-v]\n"
             "  -C/-K  CA certificate and (encrypted) private key; enables HTTPS interception\n"
             "  -P     file holding the CA key password (default: $FPGATE_CA_PASS)\n"
             "  -B     trusted CA bundle used to verify the real servers\n"
@@ -31,6 +31,7 @@ static void usage(const char *prog)
             "  -Q     squash to size x size instead of resize shorter side + centre crop\n"
             "  -D     let the JPEG decoder scale by 1/2, 1/4, 1/8 (faster, not bit-exact with PIL)\n"
             "  -L     largest image analysed, in bytes (default 8388608)\n"
+            "  -W     image decode worker threads (default 1, 0 = decode inside the event loop)\n"
             "  -N     do not inspect HTTP at all: pure forwarding\n",
             prog);
 }
@@ -78,6 +79,10 @@ int main(int argc, char **argv)
             icfg.max_bytes = strtoul(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "-N") == 0) {
             icfg.enabled = 0;
+        } else if (strcmp(argv[i], "-W") == 0 && i + 1 < argc) {
+            icfg.workers = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-T") == 0 && i + 1 < argc) {
+            icfg.delay_ms = (unsigned)atoi(argv[++i]);     /* test hook: slow decodes */
         } else if (strcmp(argv[i], "-v") == 0) {
             printf("fpgate-proxy %s\n", FPGATE_PROXY_VERSION);
             return 0;
@@ -90,7 +95,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "invalid port\n");
         return 2;
     }
-    if (icfg.prep.size < 16 || icfg.prep.size > 1024 || icfg.max_bytes < 1024) {
+    if (icfg.prep.size < 16 || icfg.prep.size > 1024 || icfg.max_bytes < 1024 ||
+        icfg.workers < 0 || icfg.workers > 4) {
         fprintf(stderr, "invalid image settings\n");
         return 2;
     }

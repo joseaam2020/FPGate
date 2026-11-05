@@ -81,6 +81,16 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 
 **Abierto**: ninguno de estos casos *bloquea* todavia; en DES-3.3 hay que decidir si WebP/GIF/AVIF y las imagenes danadas se bloquean (fail-closed, rompe muchos sitios porque WebP es muy comun) o se dejan pasar (hueco de contenido). Mi recomendacion: configurable, con "permitir" por defecto para formatos no soportados y "bloquear" para danadas. Decision de producto, no tecnica.
 
+**Decodificacion en hilos de trabajo** (`src/decode_pool.c`, `src/inspect.c`): medido en la placa, decodificar dentro del reactor lo detenia 90-540 ms por imagen y hasta ~1.3 s en el peor caso permitido, contra los 500 ms de RR-03 para el trafico sin imagenes. Ahora:
+- La decodificacion y el redimensionado corren en un pool de hilos (`-W n`, por defecto 1; `-W 0` decodifica dentro del reactor, util como referencia). El resultado vuelve al reactor por un `eventfd` registrado en epoll.
+- Mientras una imagen esta en un hilo, el par esta "ocupado": el proxy deja de leer del servidor, **los bytes que ya llegaron detras de la imagen se guardan en orden** (backlog) y no se cierra el par aunque el servidor haya cerrado (`eof_pending`). Al terminar se entrega la imagen y se procesa el backlog, que puede iniciar otro trabajo. El parser HTTP se pausa entre mensajes (`hs_stop`) para no reordenar respuestas.
+- Si la conexion muere con un trabajo en vuelo, el resultado se descarta: el trabajo es dueno de los bytes retenidos (se vacian con `explicit_bzero`), el hilo nunca toca la conexion.
+- Cola de 32 trabajos; si se llena, la imagen pasa sin analizar y se cuenta (`skipped_busy`). Cuando exista DES-3.3, ese caso debe aplicar la politica por defecto, no dejar pasar.
+- Los hilos usan 512 KiB de pila (la de musl por defecto es 128 KiB).
+- Prueba (`tests/integration/test_workers.sh`, decodificacion con 800 ms de retardo artificial): una peticion de texto concurrente tarda 0.60 s con decodificacion en el reactor y 0.004 s con un hilo de trabajo. Tambien cubre cierre del servidor y aborto del cliente a mitad de la decodificacion, respuestas pipelined en un mismo tunel, 8 y 45 clientes simultaneos y cierre sin fugas.
+- Medido en la placa (2026-11-04): 60 peticiones pequenas a http://example.com mientras se descarga la foto de 3840 px (537 ms de decodificacion). Con decodificacion en el reactor (`-W 0`): peor peticion 0.78 s, resto 0.25-0.28 s. Con un hilo (`-W 1`): peor peticion 0.33 s, sin pico. Una sola corrida por modo y por internet (ruido ~50 ms); los logs de ambas instancias confirman que la foto se proceso (`prep=539.0ms` y `prep=537.7ms`). Falta repetirlo varias veces para dar un intervalo.
+- **Pendiente de medir en la placa**: el HPS tiene dos nucleos y `fpgate-accel` usa CPU del HPS para las operaciones por fila del modelo; falta medir la carga combinada (decodificacion + inferencia) y fijar prioridades (`nice`) si hace falta.
+
 **Memoria y RS-01**: las imagenes retenidas viven en buffers que se copian y se borran con `explicit_bzero` al crecer y al liberar; lo mismo con filas y pixeles temporales en los decodificadores. Nada se escribe a disco. El redimensionado se hace fila a fila mientras se decodifica, asi que una foto de 24 MP no necesita su RGB completo (solo `alto x 448 x 3` bytes).
 
 **Tiempos medidos en la placa** (2026-11-02, Cortex-A9 con NEON, binario estatico musl, salida 448 crop, `prep_tool`):
@@ -94,7 +104,7 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 Por el proxy, JPEG 1280x575 por HTTPS interceptado: `prep=92.0ms` en el log, 200 en 1.06 s totales de punta a punta (incluye handshakes y la descarga desde internet). La resolucion y el codec dominan: extrapolando por pixeles, una foto de 16 MP (el tope) tardaria ~1.3 s exacta y ~0.7 s con `-D`.
 
 **Limitaciones que quedan**
-- La decodificacion corre **dentro del reactor** y bloquea el resto de conexiones mientras dura: 90-540 ms para imagenes tipicas y hasta ~1.3 s en el peor caso permitido, contra los 500 ms de RR-03 para el trafico sin imagenes. **Hay que moverla a un hilo de trabajo antes de DES-3.3** (el HPS tiene 2 nucleos, pero `fpgate-accel` tambien usa CPU del HPS para las operaciones por fila).
+- ~~La decodificacion corre dentro del reactor~~ **Resuelto (2026-11-02)**: ver "Decodificacion en hilos de trabajo".
 - Un JPEG progresivo grande necesita sus coeficientes en memoria (limite de libjpeg: 96 MB).
 - Sin pipelining >32 solicitudes en vuelo (pasa a opaco sin analizar), sin HTTP/2 (ALPN lo impide).
 - El presupuesto de retencion es global y fijo (64 MiB); la concurrencia maxima de imagenes en vuelo no esta limitada de otra forma (decision #8 sigue abierta en este punto).

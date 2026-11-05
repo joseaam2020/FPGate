@@ -16,7 +16,7 @@ WARN     := -Wall -Wextra -Werror
 HARDEN   := -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
 CSTD     := -std=gnu11 -ffp-contract=off   # coefficients must not depend on FMA availability
 COMMON    = $(CSTD) $(WARN) -Isrc -I$(PHR) -I$(MBED)/include -I$(DEPS)/include -DBUILD_EPOCH=$(BUILD_EPOCH)
-LINK      = -L$(MBED)/lib -L$(DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lz -lm
+LINK      = -L$(MBED)/lib -L$(DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lz -lm -lpthread
 
 .PHONY: native arm asan ubsan test clean
 
@@ -69,6 +69,7 @@ test: asan build/proto_dump build/prep_tool
 	python3 tests/unit/test_prep.py build/prep_tool
 	bash tests/integration/test_http.sh build/asan/fpgate-proxy
 	bash tests/integration/test_images.sh build/asan/fpgate-proxy
+	bash tests/integration/test_workers.sh build/asan/fpgate-proxy
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 
 clean:

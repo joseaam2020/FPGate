@@ -79,4 +79,14 @@ int hs_feed(hs_stream_t *s, const char *p, size_t n);
 /* The sender closed. Returns 0 when that is a clean end, -1 when it cut a message short. */
 int hs_eof(hs_stream_t *s);
 
+/*
+ * Pause: called from the `end` callback, it makes hs_feed() return right after
+ * that message without consuming the rest of its input. hs_rest() then gives
+ * the unconsumed part (valid until the caller's buffer goes away); feed it
+ * again after hs_resume().
+ */
+void hs_stop(hs_stream_t *s);
+void hs_resume(hs_stream_t *s);
+size_t hs_rest(const hs_stream_t *s, const char **p);
+
 #endif

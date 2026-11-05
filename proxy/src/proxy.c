@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "buf.h"
+#include "decode_pool.h"
 #include "http_stream.h"
 #include "inspect.h"
 #include "picohttpparser.h"
@@ -54,6 +55,7 @@ typedef struct conn {
     int eof;                        /* read side reached EOF */
     int wr_shut;                    /* shutdown(SHUT_WR) already done */
     int paused;                     /* EPOLLIN off because peer is backed up */
+    int hold;                       /* EPOLLIN off while an image of this pair is being decoded */
     int tunnel;                     /* CONNECT or Upgrade: no HTTP framing */
     int is_connect;
     tls_session_t *tls;             /* set once the connection is intercepted */
@@ -96,7 +98,7 @@ static void update_events(conn_t *c)
     else if (c->state == ST_TLS_HS)
         ev = c->hs_done ? 0 : (c->hs_want == TLS_WANT_WRITE ? EPOLLOUT : EPOLLIN);
     else if (c->state == ST_RELAY) {
-        if (!c->paused && !c->eof)
+        if (!c->paused && !c->hold && !c->eof)
             ev = EPOLLIN;
         if (buf_pending(&c->out))
             ev |= EPOLLOUT;
@@ -412,6 +414,8 @@ static int handle_request_head(conn_t *c)
     if (!c->tunnel) {
         /* Plain HTTP: the proxy wrote the request itself, so only the response is parsed. */
         u->insp = c->insp = inspect_new(host, 0, is_head ? HS_METHOD_HEAD : HS_METHOD_OTHER);
+        if (u->insp)
+            inspect_set_ctx(u->insp, u);
         u->insp_owner = u->insp != NULL;
     }
     set_events(u, EPOLLOUT, 1);
@@ -515,6 +519,8 @@ static void check_done(conn_t *c)
     conn_t *p = c->peer;
     if (c->dead || !p || p->dead)
         return;
+    if (c->insp && inspect_busy(c->insp))
+        return;                     /* an image is still being processed: not done yet */
     int plain_upstream = !c->tunnel && !c->is_client;
     if (c->eof && !buf_pending(&p->out) && !p->wr_shut && !plain_upstream) {
         if (p->tls)
@@ -528,6 +534,24 @@ static void check_done(conn_t *c)
     }
     if (c->eof && p->eof && !buf_pending(&c->out) && !buf_pending(&p->out))
         pair_kill(c);
+}
+
+static void on_relay_readable(conn_t *c);
+
+/* Hands bytes to the peer: straight to the socket if nothing is queued, else queued. */
+static int forward_to(conn_t *p, const char *data, size_t len)
+{
+    size_t off = 0;
+    if (len && !buf_pending(&p->out)) {
+        ssize_t s = conn_send(p, data, len);
+        if (s == IO_ERR)
+            return -1;
+        if (s > 0)
+            off = (size_t)s;
+    }
+    if (off < len && buf_append(&p->out, data + off, len - off) != 0)
+        return -1;
+    return 0;
 }
 
 /* Moves one chunk from c to its peer. Returns 1 if more may be buffered. */
@@ -565,24 +589,16 @@ static int relay_read_once(conn_t *c)
         data = fwd.p;
         len = buf_pending(&fwd);
     }
+    /* An image of this pair is off at a worker: stop reading the server until it is back. */
+    if (c->insp && !c->is_client)
+        c->hold = inspect_busy(c->insp);
 
-    size_t off = 0;
-    if (len && !buf_pending(&p->out)) {
-        ssize_t s = conn_send(p, data, len);
-        if (s == IO_ERR) {
-            buf_wipe_free(&fwd);
-            pair_kill(c);
-            return 0;
-        }
-        if (s > 0)
-            off = (size_t)s;
-    }
-    if (off < len && buf_append(&p->out, data + off, len - off) != 0) {
-        buf_wipe_free(&fwd);
+    int rc = forward_to(p, data, len);
+    buf_wipe_free(&fwd);
+    if (rc < 0) {
         pair_kill(c);
         return 0;
     }
-    buf_wipe_free(&fwd);
 
     if (eof) {
         c->eof = 1;
@@ -596,7 +612,37 @@ static int relay_read_once(conn_t *c)
     update_events(p);
     update_events(c);
     /* TLS may hold decrypted bytes that epoll cannot see: keep draining. */
-    return c->tls && !c->paused;
+    return c->tls && !c->paused && !c->hold;
+}
+
+/* A worker finished an image of this pair: send on what it was holding. */
+static void on_inspect_ready(void *ctx, buf_t *out, int error)
+{
+    conn_t *u = ctx;
+    if (u->dead)
+        return;
+    conn_t *c = u->peer;
+    if (error) {
+        fprintf(stderr, "HTTP framing error on %s, closing\n", conn_host(u));
+        pair_kill(u);
+        return;
+    }
+    if (forward_to(c, out->p + out->off, buf_pending(out)) < 0) {
+        pair_kill(u);
+        return;
+    }
+    u->hold = inspect_busy(u->insp);
+    u->last = c->last = time(NULL);
+    if (buf_pending(&c->out) > OUT_HIGH)
+        u->paused = 1;
+    update_events(c);
+    update_events(u);
+    if (!u->hold && u->tls && !u->eof)
+        on_relay_readable(u);       /* bytes may already sit decrypted inside the TLS session */
+    if (!u->dead) {
+        check_done(u);
+        check_done(c);
+    }
 }
 
 static void on_relay_readable(conn_t *c)
@@ -662,6 +708,8 @@ static void advance_hs(conn_t *x)
     /* Both sides are decrypted: from here on the pair is plain HTTP/1.1. */
     conn_t *cl = x->is_client ? x : p, *up = x->is_client ? p : x;
     up->insp = cl->insp = inspect_new(cl->host, 1, HS_METHOD_OTHER);
+    if (up->insp)
+        inspect_set_ctx(up->insp, up);
     up->insp_owner = up->insp != NULL;
 
     x->state = p->state = ST_RELAY;
@@ -860,7 +908,22 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
     listener.fd = lfd;
     listener.state = ST_LISTEN;
     set_events(&listener, EPOLLIN, 1);
-    fprintf(stderr, "fpgate-proxy listening on :%d\n", port);
+
+    /* Image decoding runs on worker threads; their eventfd wakes the loop. */
+    conn_t pool;
+    memset(&pool, 0, sizeof pool);
+    const inspect_cfg_t *icfg = inspect_config();
+    if (icfg->enabled && icfg->workers > 0) {
+        pool.fd = dp_start(icfg->workers, icfg->delay_ms);
+        if (pool.fd >= 0)
+            set_events(&pool, EPOLLIN, 1);
+        else
+            fprintf(stderr, "cannot start decode workers: decoding inline\n");
+    } else {
+        pool.fd = -1;
+    }
+    fprintf(stderr, "fpgate-proxy listening on :%d (%d decode worker%s)\n", port,
+            dp_active() ? icfg->workers : 0, icfg->workers == 1 ? "" : "s");
 
     struct epoll_event evs[64];
     time_t last_sweep = time(NULL);
@@ -870,6 +933,8 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
             conn_t *c = evs[i].data.ptr;
             if (c == &listener)
                 accept_clients(&listener);
+            else if (c == &pool)
+                inspect_collect(on_inspect_ready);
             else
                 on_event(c, evs[i].events);
         }
@@ -879,7 +944,7 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
             if (now % 60 == 0)
                 tls_ca_recheck();
             for (conn_t *c = g_all; c; c = c->next)
-                if (now - c->last > IDLE_SECS && !c->dead)
+                if (now - c->last > IDLE_SECS && !c->dead && !c->hold && !(c->peer && c->peer->hold))
                     pair_kill(c);
         }
         reap_dead();
@@ -887,7 +952,9 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
 
     while (g_all)
         conn_kill(g_all);
-    reap_dead();
+    reap_dead();                    /* frees the inspectors: pending results become orphans */
+    dp_stop();
+    inspect_collect(on_inspect_ready);
     close(g_ep);
     close(lfd);
     return 0;

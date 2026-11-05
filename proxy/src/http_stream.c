@@ -36,6 +36,9 @@ struct hs_stream {
     int crlf_pos;               /* S_CHUNK_CRLF: 0 expects CR, 1 expects LF */
     size_t line_len;            /* S_TRAILER */
     size_t trailer_total;
+    int stop;                   /* the owner asked to pause after the current message */
+    const char *rest;           /* input not consumed because of the pause */
+    size_t rest_len;
 };
 
 typedef struct {
@@ -283,9 +286,26 @@ static int hexval(char c)
     return -1;
 }
 
+void hs_stop(hs_stream_t *s) { s->stop = 1; }
+
+void hs_resume(hs_stream_t *s) { s->stop = 0; }
+
+size_t hs_rest(const hs_stream_t *s, const char **p)
+{
+    *p = s->rest;
+    return s->rest_len;
+}
+
 int hs_feed(hs_stream_t *s, const char *p, size_t n)
 {
+    s->rest = NULL;
+    s->rest_len = 0;
     while (n > 0) {
+        if (s->stop) {
+            s->rest = p;
+            s->rest_len = n;
+            return 0;
+        }
         if ((s->pair->upgraded || s->pair->overflow) && s->state != S_OPAQUE)
             s->state = S_OPAQUE;
 
