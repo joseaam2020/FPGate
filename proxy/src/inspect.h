@@ -30,6 +30,7 @@ typedef struct {
     prep_cfg_t prep;
     int workers;                /* decode threads; 0 decodes inline in the event loop */
     unsigned delay_ms;          /* test hook: extra delay per decode job */
+    int verbose;                /* log the path and Referer of every response, not only images */
 } inspect_cfg_t;
 
 typedef struct {
@@ -56,6 +57,13 @@ inspect_t *inspect_new(const char *host, int track_requests, int first_method);
 void inspect_free(inspect_t *i);
 /* Opaque pointer handed back to the inspect_collect() callback. */
 void inspect_set_ctx(inspect_t *i, void *ctx);
+
+/*
+ * Plain-HTTP mode only: remembers what was asked (path and Referer, query strings
+ * dropped) so the log can say which page an image belongs to.
+ */
+void inspect_note_request(inspect_t *i, const char *path, size_t path_len, const char *referer,
+                          size_t referer_len);
 
 /* Bytes going client -> server. Forwardable bytes are appended to `out`. */
 int inspect_request(inspect_t *i, const char *p, size_t n, buf_t *out);

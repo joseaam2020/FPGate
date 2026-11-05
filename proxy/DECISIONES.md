@@ -79,6 +79,16 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 | `Content-Encoding` distinto de identity | se transmite sin analizar | `skipped_encoded` |
 | Content-Length + Transfer-Encoding, longitudes contradictorias, chunk mal formado | **se cierra la conexion** (un parser que discrepa del navegador permitiria colar imagenes) | - |
 
+**Log de imagenes** (2026-11-04, a raiz de la primera prueba con Chrome real, donde no aparecia ninguna linea `IMG`): cada imagen que el proxy ve deja ahora una linea, tambien las que descarta, con el motivo.
+- Analizada: `IMG host=H kind=jpeg src=WxH bytes=N prep=Xms`; fallos: `IMG host=H kind=K bytes=N error=corrupt|unsupported|too_large|unsupported_format|not_an_image`.
+- Descartada: `IMG host=H type=image/jpeg skipped=encoded|oversize|budget|partial|busy bytes=N|framing`.
+- Con `-V` se agrega ` path=/ruta ref=pagina/origen` (sin esquema ni query string: los tokens y parametros nunca se registran) a cada linea, y una linea `RESP host status type bytes action` por **cada** respuesta, para ver por que algo no se analizo. La ruta y el Referer se emparejan con su respuesta mediante una cola por conexion (pipelining incluido). Sin `-V` no se registra ninguna ruta (RS-05).
+- Una respuesta sin `Content-Type` se retiene hasta ver 12 bytes: si no es imagen se libera y con `-V` queda como `action=sniffed-not-image`.
+
+**TLS que no es HTTP** (primera prueba con Chrome real: `mtalk.google.com:5228`, canal push de Google): si lo primero que el cliente envia tras el handshake no se puede leer como una peticion HTTP, el par pasa a opaco (se reenvia sin analizar) en vez de cerrarse con `framing error`. Solo se aplica a los primeros bytes de la conexion, que vienen del cliente; un servidor no puede usarlo para esconder una imagen. Un `framing error` posterior (despues de una peticion HTTP valida) sigue cerrando la conexion.
+
+**Prueba con navegador**: el PC de desarrollo tiene Qustodio (control parental) instalado, que intercepta el HTTPS de los navegadores incluso a traves de un proxy explicito y rechaza la CA de FPGate (Chrome muestra `ERR_CERT_COMMON_NAME_INVALID` con certificados `verifyfail.*` emitidos por `Qustodio (15)`). Las pruebas con navegador se hacen desde otro equipo; `curl`/`openssl` no se ven afectados. Chrome se lanza con `--proxy-server` y un `--user-data-dir` propio para que solo esa instancia use el proxy.
+
 **Abierto**: ninguno de estos casos *bloquea* todavia; en DES-3.3 hay que decidir si WebP/GIF/AVIF y las imagenes danadas se bloquean (fail-closed, rompe muchos sitios porque WebP es muy comun) o se dejan pasar (hueco de contenido). Mi recomendacion: configurable, con "permitir" por defecto para formatos no soportados y "bloquear" para danadas. Decision de producto, no tecnica.
 
 **Decodificacion en hilos de trabajo** (`src/decode_pool.c`, `src/inspect.c`): medido en la placa, decodificar dentro del reactor lo detenia 90-540 ms por imagen y hasta ~1.3 s en el peor caso permitido, contra los 500 ms de RR-03 para el trafico sin imagenes. Ahora:

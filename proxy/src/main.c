@@ -23,7 +23,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-p port] [-C ca.crt -K ca.key [-P passfile] [-B bundle.pem]]\n"
-            "          [-S size] [-Q] [-D] [-L max_bytes] [-W workers] [-N] [-v]\n"
+            "          [-S size] [-Q] [-D] [-L max_bytes] [-W workers] [-V] [-N] [-v]\n"
             "  -C/-K  CA certificate and (encrypted) private key; enables HTTPS interception\n"
             "  -P     file holding the CA key password (default: $FPGATE_CA_PASS)\n"
             "  -B     trusted CA bundle used to verify the real servers\n"
@@ -77,6 +77,8 @@ int main(int argc, char **argv)
             icfg.prep.dct_scaling = 1;
         } else if (strcmp(argv[i], "-L") == 0 && i + 1 < argc) {
             icfg.max_bytes = strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "-V") == 0) {
+            icfg.verbose = 1;
         } else if (strcmp(argv[i], "-N") == 0) {
             icfg.enabled = 0;
         } else if (strcmp(argv[i], "-W") == 0 && i + 1 < argc) {

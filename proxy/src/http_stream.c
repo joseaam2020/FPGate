@@ -36,6 +36,7 @@ struct hs_stream {
     int crlf_pos;               /* S_CHUNK_CRLF: 0 expects CR, 1 expects LF */
     size_t line_len;            /* S_TRAILER */
     size_t trailer_total;
+    int seen_head;              /* a well-formed message head has been parsed on this stream */
     int stop;                   /* the owner asked to pause after the current message */
     const char *rest;           /* input not consumed because of the pause */
     size_t rest_len;
@@ -196,6 +197,7 @@ static void message_done(hs_stream_t *s)
 /* A complete head is available. Returns 0, or -1 on a framing error. */
 static int process_head(hs_stream_t *s, const parsed_t *pt, const char *raw, size_t raw_len)
 {
+    s->seen_head = 1;
     hs_head_t h;
     memset(&h, 0, sizeof h);
     h.is_request = s->is_request;
@@ -209,6 +211,8 @@ static int process_head(hs_stream_t *s, const parsed_t *pt, const char *raw, siz
     if (s->is_request) {
         h.method = pt->method;
         h.method_len = pt->method_len;
+        h.path = pt->path;
+        h.path_len = pt->path_len;
         int kind = HS_METHOD_OTHER;
         if (pt->method_len == 4 && memcmp(pt->method, "HEAD", 4) == 0)
             kind = HS_METHOD_HEAD;
@@ -341,6 +345,14 @@ int hs_feed(hs_stream_t *s, const char *p, size_t n)
                             n = 0;
                         }
                     }
+                } else if (s->is_request && !s->seen_head) {
+                    /* The first bytes are not HTTP at all (a TLS-wrapped push channel, MQTT...):
+                     * stop looking and let the connection through untouched. */
+                    s->pair->upgraded = 1;
+                    s->state = S_OPAQUE;
+                    s->cb.opaque(s->user, p, n);
+                    p += n;
+                    n = 0;
                 } else {
                     rc = -1;
                 }
@@ -375,6 +387,13 @@ int hs_feed(hs_stream_t *s, const char *p, size_t n)
                     n -= take;
                     if (s->head_len >= HEAD_MAX)
                         rc = -1;
+                } else if (s->is_request && !s->seen_head) {
+                    s->pair->upgraded = 1;
+                    s->state = S_OPAQUE;
+                    s->cb.opaque(s->user, s->head, prev + take);
+                    s->head_len = 0;
+                    p += take;
+                    n -= take;
                 } else {
                     rc = -1;
                 }

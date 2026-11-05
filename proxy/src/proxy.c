@@ -324,6 +324,16 @@ static int handle_request_head(conn_t *c)
         }
     }
 
+    /* What was asked, for the image log; the head buffer is freed below. */
+    char ctx_path[128] = "", ctx_ref[160] = "";
+    if (!is_connect) {
+        if (target_path)
+            snprintf(ctx_path, sizeof ctx_path, "%.*s", (int)target_path_len, target_path);
+        for (size_t k = 0; k < nh; k++)
+            if (hs[k].name && hs[k].name_len == 7 && strncasecmp(hs[k].name, "referer", 7) == 0)
+                snprintf(ctx_ref, sizeof ctx_ref, "%.*s", (int)hs[k].value_len, hs[k].value);
+    }
+
     conn_t *u = NULL;
     int ufd = upstream_connect(host, port);
     if (ufd < 0) {
@@ -414,8 +424,10 @@ static int handle_request_head(conn_t *c)
     if (!c->tunnel) {
         /* Plain HTTP: the proxy wrote the request itself, so only the response is parsed. */
         u->insp = c->insp = inspect_new(host, 0, is_head ? HS_METHOD_HEAD : HS_METHOD_OTHER);
-        if (u->insp)
+        if (u->insp) {
             inspect_set_ctx(u->insp, u);
+            inspect_note_request(u->insp, ctx_path, strlen(ctx_path), ctx_ref, strlen(ctx_ref));
+        }
         u->insp_owner = u->insp != NULL;
     }
     set_events(u, EPOLLOUT, 1);

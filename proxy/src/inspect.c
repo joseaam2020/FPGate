@@ -28,11 +28,68 @@ const inspect_stats_t *inspect_stats(void) { return &g_stats; }
 
 enum { M_STREAM, M_SNIFF, M_CAPTURE };
 
+/* What a response answers, for the log. Query strings are dropped on purpose. */
+struct rctx {
+    char path[128];
+    char ref[128];                      /* Referer without scheme, i.e. the page */
+};
+
+#define RCTX_QUEUE 32
+
+/* Copies up to the first '?' or '#', truncated. */
+static void cut_url(char *dst, size_t n, const char *p, size_t len)
+{
+    size_t k = 0;
+    while (k < len && k + 1 < n && p[k] != '?' && p[k] != '#') {
+        dst[k] = p[k];
+        k++;
+    }
+    dst[k] = '\0';
+}
+
+/* Media type only, without parameters. */
+static void cut_type(char *dst, size_t n, const char *p, size_t len)
+{
+    while (len && (*p == ' ' || *p == '\t')) {
+        p++;
+        len--;
+    }
+    size_t k = 0;
+    while (k < len && k + 1 < n && p[k] != ';' && p[k] != ' ' && p[k] != '\t') {
+        dst[k] = p[k];
+        k++;
+    }
+    dst[k] = '\0';
+}
+
+
+static void cut_referer(char *dst, size_t n, const char *p, size_t len)
+{
+    if (len >= 8 && strncasecmp(p, "https://", 8) == 0) {
+        p += 8;
+        len -= 8;
+    } else if (len >= 7 && strncasecmp(p, "http://", 7) == 0) {
+        p += 7;
+        len -= 7;
+    }
+    cut_url(dst, n, p, len);
+}
+
+/* " path=... ref=..." when verbose logging is on, else nothing. */
+static const char *ctx_suffix(char *buf, size_t n, const struct rctx *c)
+{
+    buf[0] = '\0';
+    if (g_cfg.verbose)
+        snprintf(buf, n, " path=%s ref=%s", c->path[0] ? c->path : "-", c->ref[0] ? c->ref : "-");
+    return buf;
+}
+
 /* A decode in flight. It owns the held bytes while a worker reads them. */
 typedef struct ijob {
     dp_job_t dp;
     struct inspect *owner;              /* NULL once the connection is gone */
     char host[256];
+    struct rctx ctx;
     buf_t head, braw, bdata;
     size_t held;
     int chunked;
@@ -43,6 +100,12 @@ struct inspect {
     hs_stream_t *req, *resp;
     char host[256];
     void *ctx;
+    struct rctx rq[RCTX_QUEUE];         /* requests sent, oldest first, awaiting their response */
+    unsigned rq_head, rq_count;
+    struct rctx cur;                    /* the request the response being handled answers */
+    char cur_type[48];                  /* its Content-Type, for the log */
+    char cur_size[24];                  /* its size or framing, for the log */
+    int cur_status;
     buf_t *out;                         /* where forwardable bytes go during a feed */
     int oom;
     int mode;
@@ -112,16 +175,18 @@ static double now_ms(void)
 /* ---- the image path -------------------------------------------------------- */
 
 /* Counts and logs the outcome of a decode, wherever it ran. */
-static void record_result(const char *host, img_kind_t kind, size_t bytes, prep_status_t st,
-                          const prep_result_t *r, double ms)
+static void record_result(const char *host, const struct rctx *c, img_kind_t kind, size_t bytes,
+                          prep_status_t st, const prep_result_t *r, double ms)
 {
+    char sfx[300];
+    ctx_suffix(sfx, sizeof sfx, c);
     if (st == PREP_OK) {
         g_stats.decoded++;
         g_stats.prep_ms_total += ms;
         if (ms > g_stats.prep_ms_max)
             g_stats.prep_ms_max = ms;
-        fprintf(stderr, "IMG host=%s kind=%s src=%dx%d bytes=%zu prep=%.1fms\n", host,
-                image_kind_name(kind), r->src_w, r->src_h, bytes, ms);
+        fprintf(stderr, "IMG host=%s kind=%s src=%dx%d bytes=%zu prep=%.1fms%s\n", host,
+                image_kind_name(kind), r->src_w, r->src_h, bytes, ms, sfx);
         return;
     }
     if (st == PREP_CORRUPT)
@@ -130,8 +195,16 @@ static void record_result(const char *host, img_kind_t kind, size_t bytes, prep_
         g_stats.too_many_pixels++;
     else
         g_stats.unsupported_format++;
-    fprintf(stderr, "IMG host=%s kind=%s bytes=%zu error=%s\n", host, image_kind_name(kind),
-            bytes, prep_status_name(st));
+    fprintf(stderr, "IMG host=%s kind=%s bytes=%zu error=%s%s\n", host, image_kind_name(kind),
+            bytes, prep_status_name(st), sfx);
+}
+
+/* An image-looking response that is not going to be analysed, and why. */
+static void log_skip(const inspect_t *i, const char *type, const char *reason, const char *size)
+{
+    char sfx[300];
+    fprintf(stderr, "IMG host=%s type=%s skipped=%s bytes=%s%s\n", i->host, type, reason, size,
+            ctx_suffix(sfx, sizeof sfx, &i->cur));
 }
 
 /*
@@ -160,6 +233,7 @@ static void analyse(inspect_t *i)
                     j->owner = i;
                     j->chunked = i->chunked;
                     snprintf(j->host, sizeof j->host, "%s", i->host);
+                    j->ctx = i->cur;
                     j->head = i->head;
                     j->braw = i->braw;
                     j->bdata = i->bdata;
@@ -177,52 +251,113 @@ static void analyse(inspect_t *i)
                 free(j);
             }
             g_stats.skipped_busy++;             /* queue full: let it through unexamined */
-            fprintf(stderr, "IMG host=%s kind=%s bytes=%zu skipped=busy\n", i->host,
-                    image_kind_name(kind), n);
+            {
+                char sfx[300];
+                fprintf(stderr, "IMG host=%s kind=%s bytes=%zu skipped=busy%s\n", i->host,
+                        image_kind_name(kind), n, ctx_suffix(sfx, sizeof sfx, &i->cur));
+            }
         } else {
             prep_result_t r;
             if (g_cfg.delay_ms)
                 usleep(g_cfg.delay_ms * 1000u);     /* test hook, same delay the workers get */
             double t0 = now_ms();
             prep_status_t st = image_prep(kind, img, n, &g_cfg.prep, &r);
-            record_result(i->host, kind, n, st, &r, now_ms() - t0);
+            record_result(i->host, &i->cur, kind, n, st, &r, now_ms() - t0);
             if (st == PREP_OK)
                 prep_result_free(&r);
         }
-    } else if (kind == IMG_OTHER) {
-        g_stats.unsupported_format++;
-        fprintf(stderr, "IMG host=%s kind=other bytes=%zu error=unsupported_format\n", i->host, n);
     } else {
-        g_stats.not_an_image++;
-        fprintf(stderr, "IMG host=%s kind=unknown bytes=%zu error=not_an_image\n", i->host, n);
+        char sfx[300];
+        ctx_suffix(sfx, sizeof sfx, &i->cur);
+        if (kind == IMG_OTHER) {
+            g_stats.unsupported_format++;
+            fprintf(stderr, "IMG host=%s kind=other type=%s bytes=%zu error=unsupported_format%s\n",
+                    i->host, i->cur_type, n, sfx);
+        } else {
+            g_stats.not_an_image++;
+            fprintf(stderr, "IMG host=%s kind=unknown type=%s bytes=%zu error=not_an_image%s\n",
+                    i->host, i->cur_type, n, sfx);
+        }
     }
     release_held(i);                    /* verdict for now: deliver the original */
 }
 
 /* ---- response callbacks ------------------------------------------------------ */
 
+static void log_resp(const inspect_t *i, const char *action)
+{
+    if (!g_cfg.verbose)
+        return;
+    char sfx[300];
+    fprintf(stderr, "RESP host=%s status=%d type=%s bytes=%s action=%s%s\n", i->host, i->cur_status,
+            i->cur_type[0] ? i->cur_type : "-", i->cur_size, action,
+            ctx_suffix(sfx, sizeof sfx, &i->cur));
+}
+
+static void ctx_pop(inspect_t *i)
+{
+    memset(&i->cur, 0, sizeof i->cur);
+    if (i->rq_count) {
+        i->cur = i->rq[i->rq_head];
+        i->rq_head = (i->rq_head + 1) % RCTX_QUEUE;
+        i->rq_count--;
+    }
+}
+
+static const char *framing_name(hs_body_t b)
+{
+    switch (b) {
+    case HS_BODY_LENGTH:  return "content-length";
+    case HS_BODY_CHUNKED: return "chunked";
+    case HS_BODY_CLOSE:   return "until-close";
+    default:              return "none";
+    }
+}
+
 static void resp_head(void *u, const hs_head_t *h)
 {
     inspect_t *i = u;
     i->mode = M_STREAM;
 
+    if (h->status >= 200)
+        ctx_pop(i);                     /* 1xx are interim: the real answer is still to come */
+
+    const struct phr_header *ct = find_header(h, "content-type");
+    i->cur_type[0] = '\0';
+    if (ct)
+        cut_type(i->cur_type, sizeof i->cur_type, ct->value, ct->value_len);
+    const char *type = i->cur_type[0] ? i->cur_type : "-";
+    char *size = i->cur_size;
+    i->cur_status = h->status;
+    if (h->body == HS_BODY_LENGTH)
+        snprintf(i->cur_size, sizeof i->cur_size, "%llu", (unsigned long long)h->content_length);
+    else
+        snprintf(i->cur_size, sizeof i->cur_size, "%s", framing_name(h->body));
+
+    ct_class_t cls = ct ? image_classify_content_type(ct->value, ct->value_len) : CT_AMBIGUOUS;
+    const char *action = "stream";
+
     if (h->status == 200 && h->body != HS_BODY_NONE) {
-        const struct phr_header *ct = find_header(h, "content-type");
-        ct_class_t cls = ct ? image_classify_content_type(ct->value, ct->value_len) : CT_AMBIGUOUS;
         const struct phr_header *ce = find_header(h, "content-encoding");
         int encoded = ce && !(ce->value_len == 8 && strncasecmp(ce->value, "identity", 8) == 0);
 
         if (cls != CT_NOT_IMAGE) {
             if (encoded) {
                 g_stats.skipped_encoded++;
+                log_skip(i, type, "encoded", size);
+                action = "skip-encoded";
             } else if (h->body == HS_BODY_LENGTH && h->content_length > g_cfg.max_bytes) {
                 g_stats.skipped_oversize++;
+                log_skip(i, type, "oversize", size);
+                action = "skip-oversize";
             } else if (h->body == HS_BODY_LENGTH && cls == CT_AMBIGUOUS &&
                        h->content_length < IMG_SNIFF_BYTES) {
-                /* too short to be an image */
+                action = "stream";      /* too short to be an image */
             } else if (g_held + (h->body == HS_BODY_LENGTH ? h->content_length : 0) >
                        g_cfg.budget_bytes) {
                 g_stats.skipped_budget++;
+                log_skip(i, type, "budget", size);
+                action = "skip-budget";
             } else {
                 i->mode = cls == CT_IMAGE ? M_CAPTURE : M_SNIFF;
                 i->chunked = h->body == HS_BODY_CHUNKED;
@@ -236,11 +371,14 @@ static void resp_head(void *u, const hs_head_t *h)
                 }
             }
         }
-    } else if (h->status == 206 && !h->is_request) {
-        const struct phr_header *ct = find_header(h, "content-type");
-        if (ct && image_classify_content_type(ct->value, ct->value_len) == CT_IMAGE)
-            g_stats.skipped_partial++;
+    } else if (h->status == 206 && !h->is_request && cls == CT_IMAGE) {
+        g_stats.skipped_partial++;
+        log_skip(i, type, "partial", size);
+        action = "skip-partial";
     }
+
+    if (h->status >= 200)
+        log_resp(i, action);
     emit(i, h->raw, h->raw_len);
 }
 
@@ -274,7 +412,10 @@ static void resp_body(void *u, const char *raw, size_t raw_len, const char *data
         if (have >= IMG_SNIFF_BYTES) {
             const uint8_t *b = (const uint8_t *)(i->chunked ? i->bdata.p : i->braw.p);
             if (image_sniff(b, have) == IMG_UNKNOWN)
+{
+                log_resp(i, "sniffed-not-image");
                 release_held(i);        /* not an image after all: stop holding */
+            }
             else
                 i->mode = M_CAPTURE;
         }
@@ -287,7 +428,10 @@ static void resp_end(void *u)
     if (i->mode == M_CAPTURE)
         analyse(i);
     else if (i->mode == M_SNIFF)
+{
+        log_resp(i, "sniffed-too-short");
         release_held(i);
+    }
     if (!i->waiting)
         i->mode = M_STREAM;
 }
@@ -299,9 +443,32 @@ static void resp_opaque(void *u, const char *p, size_t n)
 
 /* ---- request callbacks: forward everything, the parser only tracks framing ---- */
 
+static void ctx_push(inspect_t *i, const char *path, size_t path_len, const char *ref,
+                     size_t ref_len)
+{
+    if (i->rq_count >= RCTX_QUEUE)
+        return;                         /* absurdly deep pipeline: those responses go unlabelled */
+    struct rctx *c = &i->rq[(i->rq_head + i->rq_count) % RCTX_QUEUE];
+    memset(c, 0, sizeof *c);
+    if (path)
+        cut_url(c->path, sizeof c->path, path, path_len);
+    if (ref)
+        cut_referer(c->ref, sizeof c->ref, ref, ref_len);
+    i->rq_count++;
+}
+
 static void req_head(void *u, const hs_head_t *h)
 {
-    emit(u, h->raw, h->raw_len);
+    inspect_t *i = u;
+    const struct phr_header *rf = find_header(h, "referer");
+    ctx_push(i, h->path, h->path_len, rf ? rf->value : NULL, rf ? rf->value_len : 0);
+    emit(i, h->raw, h->raw_len);
+}
+
+void inspect_note_request(inspect_t *i, const char *path, size_t path_len, const char *referer,
+                          size_t referer_len)
+{
+    ctx_push(i, path, path_len, referer, referer_len);
 }
 
 static void req_body(void *u, const char *raw, size_t raw_len, const char *data, size_t data_len)
@@ -442,7 +609,7 @@ void inspect_collect(inspect_ready_fn ready)
         ijob_t *j = dj->user;
         size_t n = j->chunked ? j->bdata.len : j->braw.len;
 
-        record_result(j->host, dj->kind, n, dj->status, &dj->result, dj->ms);
+        record_result(j->host, &j->ctx, dj->kind, n, dj->status, &dj->result, dj->ms);
         if (dj->status == PREP_OK) {
             /* DES-3.3: dj->result.rgb goes to fpgate-accel here and its score decides. */
             prep_result_free(&dj->result);

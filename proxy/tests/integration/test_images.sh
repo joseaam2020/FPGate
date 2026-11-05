@@ -63,7 +63,9 @@ $BIN -p 18090 -C "$T/ca/ca.crt" -K "$T/ca/ca.key" -P "$T/pass" -B "$T/oca.crt" 2
 # Second instance with a 100 KB analysis limit, third with inspection off.
 $BIN -p 18091 -L 100000 2>"$T/p2.log" & P2=$!
 $BIN -p 18092 -N 2>"$T/p3.log" & P3=$!
-PIDS="$PIDS $P1 $P2 $P3"
+$BIN -p 18093 -V -C "$T/ca/ca.crt" -K "$T/ca/ca.key" -P "$T/pass" -B "$T/oca.crt" 2>"$T/p4.log" & P4=$!
+python3 tests/integration/tls_echo.py 18444 "$T/o.crt" "$T/o.key" & PIDS="$PIDS $!"
+PIDS="$PIDS $P1 $P2 $P3 $P4"
 sleep 2
 
 H="-x http://127.0.0.1:18090"
@@ -114,20 +116,22 @@ curl -s $H "$O/img/page.txt" | cmp -s - "$T/img/page.txt"; check "text/plain del
 curl -s $H "$O/img/tiny.bin" | cmp -s - "$T/img/tiny.bin"; check "3-byte octet-stream delivered unchanged" $?
 h=$(curl -s -I $H "$O/img/photo.jpg"); echo "$h" | grep -qi '^content-length: '; check "HEAD answers with headers and no body (no hang)" $?
 code=$(curl -s -o /dev/null -w '%{http_code}' $H "$O/img/photo.jpg?status=304"); [ "$code" = 304 ]; check "304 passes" $?
-before=$(count 'IMG ')
+before=$(count 'IMG .*(src=|error=)')
 curl -s $H "$O/img/photo.jpg?status=206" | cmp -s - "$T/img/photo.jpg"; check "206 partial content delivered unchanged" $?
-[ "$(count 'IMG ')" -eq "$before" ]; check "206 is not analysed (policy: pass without analysis)" $?
+[ "$(count 'IMG .*(src=|error=)')" -eq "$before" ]; check "206 is not analysed (policy: pass without analysis)" $?
+grep -q 'type=image/jpeg skipped=partial' "$T/p1.log"; check "206: the skip is logged with its reason (partial)" $?
 curl -s $H "$O/img/photo.jpg?enc=gzip" | cmp -s - "$T/img/photo.jpg"; check "Content-Encoding image delivered unchanged" $?
-[ "$(count 'IMG ')" -eq "$before" ]; check "Content-Encoding image is not analysed" $?
+[ "$(count 'IMG .*(src=|error=)')" -eq "$before" ]; check "Content-Encoding image is not analysed" $?
+grep -q 'type=image/jpeg skipped=encoded' "$T/p1.log"; check "Content-Encoding: the skip is logged with its reason (encoded)" $?
 
 # --- 6. keep-alive: many responses on one intercepted connection --------------------
-n0=$(count 'IMG ')
+n0=$(count 'IMG .*(src=|error=)')
 out=$(curl -s $S "$Q/img/photo.jpg" "$Q/echo" "$Q/img/pic.png?mode=chunked" "$Q/img/prog.jpg" "$Q/chunked" | sha)
 want=$( { cat "$T/img/photo.jpg"; echo; } >/dev/null; \
         { cat "$T/img/photo.jpg"; \
           curl -s $S "$Q/echo"; cat "$T/img/pic.png"; cat "$T/img/prog.jpg"; printf 'hello chunked world'; } | sha)
 [ "$out" = "$want" ]; check "keep-alive: image, text, chunked image, image, chunked text in one tunnel" $?
-[ "$(count 'IMG ')" -eq $((n0 + 3)) ]; check "keep-alive: the three images in that tunnel were all analysed" $?
+[ "$(count 'IMG .*(src=|error=)')" -eq $((n0 + 3)) ]; check "keep-alive: the three images in that tunnel were all analysed" $?
 
 # --- 7. the reactor is not blocked while an image is held ------------------------------
 curl -s $H "$O/img/photo.jpg?slow=1" -o "$T/slow.out" & SLOW=$!
@@ -141,7 +145,8 @@ cmp -s "$T/slow.out" "$T/img/photo.jpg"; check "the slowly delivered image arriv
 # --- 8. limits and switches -----------------------------------------------------------------
 H2="-x http://127.0.0.1:18091"
 curl -s $H2 "$O/img/large.jpg" | cmp -s - "$T/img/large.jpg"; check "image over -L limit delivered unchanged" $?
-! grep -q 'IMG ' "$T/p2.log"; check "image over -L limit is streamed, not analysed" $?
+! grep -qE 'IMG .*(src=|error=)' "$T/p2.log"; check "image over -L limit is streamed, not analysed" $?
+grep -q 'type=image/jpeg skipped=oversize' "$T/p2.log"; check "image over -L limit: the skip is logged with its reason (oversize)" $?
 H3="-x http://127.0.0.1:18092"
 curl -s $H3 "$O/img/photo.jpg?mode=chunked" | cmp -s - "$T/img/photo.jpg"; check "-N: image delivered unchanged" $?
 ! grep -q 'IMG ' "$T/p3.log"; check "-N: no inspection at all" $?
@@ -150,6 +155,31 @@ curl -s $H3 "$O/img/photo.jpg?mode=chunked" | cmp -s - "$T/img/photo.jpg"; check
 curl -s $H "$O/img/photo.jpg?mode=smuggle" -o "$T/sm.out"; rc=$?
 { [ $rc -ne 0 ] || ! cmp -s "$T/sm.out" "$T/img/photo.jpg"; }; check "Content-Length + Transfer-Encoding: connection refused" $?
 grep -q 'framing error' "$T/p1.log"; check "framing error logged" $?
+
+
+# --- 10. the log says which page an image belongs to (-V) --------------------------------------
+H4="-x http://127.0.0.1:18093"
+S4="-x http://127.0.0.1:18093 --cacert $T/ca/ca.crt"
+curl -s -e "http://news.example.org/story?id=7" $H4 "$O/img/photo.jpg?token=secret" -o /dev/null
+grep -q 'IMG host=127.0.0.1 kind=jpeg .* path=/img/photo.jpg ref=news.example.org/story$' "$T/p4.log"
+check "-V: image line carries its path and the page that requested it (plain HTTP)" $?
+! grep -qE 'secret|id=7' "$T/p4.log"; check "-V: query strings are never logged" $?
+curl -s -e "https://fpgate.test/wiki/Alps?x=1" $S4 "$Q/img/pic.png" -o /dev/null
+grep -q 'IMG host=fpgate.test kind=png .* path=/img/pic.png ref=fpgate.test/wiki/Alps$' "$T/p4.log"
+check "-V: same over an intercepted HTTPS tunnel" $?
+curl -s $S4 "$Q/echo" "$Q/img/photo.jpg" -o /dev/null -o /dev/null
+grep -qE 'RESP host=fpgate.test status=200 type=- bytes=[0-9]+ action=(stream|sniffed-not-image) path=/echo' "$T/p4.log"
+check "-V: non-image responses get a RESP line" $?
+grep -q 'RESP host=fpgate.test status=200 type=image/jpeg .* action=stream' "$T/p4.log" || \
+    grep -q 'IMG host=fpgate.test kind=jpeg .* path=/img/photo.jpg' "$T/p4.log"
+check "-V: the image after a text response in the same tunnel is attributed to its own path" $?
+! grep -q 'path=' "$T/p1.log"; check "without -V nothing about paths is logged" $?
+
+# --- 11. TLS that is not HTTP must pass through, not be cut -------------------------------------
+fe0=$(grep -c 'framing error' "$T/p1.log")
+python3 tests/integration/opaque_client.py 18090 fpgate.test 18444 "$T/ca/ca.crt" >"$T/opq.out" 2>&1
+grep -q '^ok' "$T/opq.out"; check "non-HTTP protocol inside TLS passes through untouched ($(tail -1 "$T/opq.out" | cut -c1-60))" $?
+[ "$(grep -c 'framing error' "$T/p1.log")" -eq "$fe0" ]; check "non-HTTP protocol is not reported as a framing error" $?
 
 kill -0 $P1 2>/dev/null; check "proxy still alive" $?
 if grep -E "AddressSanitizer|runtime error|LeakSanitizer" "$T"/p*.log; then echo "FAIL sanitizer report"; fail=1; fi

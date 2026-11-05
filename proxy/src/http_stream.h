@@ -32,6 +32,8 @@ typedef enum {
 typedef struct {
     int is_request;
     const char *method;     /* requests */
+    const char *path;
+    size_t path_len;
     size_t method_len;
     int status;             /* responses */
     int minor;
