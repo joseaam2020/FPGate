@@ -228,3 +228,9 @@ para decisiones intermedias usar `val_holdout.csv` (1000 imgs, nunca usadas) y r
 
 FN por clase: sin podar 19 hentai; r5 23 hentai + 2 porn + 1 sexy; r7 18 hentai + 1 sexy. Regla previa (r5 reemplaza a r7 solo con ≥3 FN menos): **no se cumple, se queda r7**.
 Decisión: r7 como modelo E1 podado, con excepción documentada al criterio original (test: FN 15 > 12, cambios 25 > 20).
+
+## 10. Exportación de r7 (`quant/release/e1_r7/`, no versionada)
+`quant/export.py` genera el paquete; `quant/export_check.py` lo verifica reconstruyendo la inferencia solo desde `manifest.json` + `.bin`.
+Archivos: `weights_i8.bin` 55.3 MB, `epilogue_i32.bin` 0.8 MB (sesgo, M0, shift), `epilogue_f64.bin`, `tables.bin` (exp, recíproco, SiLU por bloque, RoPE Q1.14), `hps_f32.bin` 3.4 MB; total 59.8 MB.
+Vectores: 20 imágenes de `val_holdout` (CHW float32), logits esperados y SHA-256 de intermedios; intermedios completos de la imagen 0 en bloques 0 y 11.
+Verificación: 20/20 vectores con logits idénticos bit a bit (log en `quant/logs/export_check_r7.log`).

@@ -112,3 +112,36 @@ Reglas:
    el INT8 sin podar.
 5. Estos márgenes son una propuesta del equipo, no un requisito externo. Si existe un requisito
    externo de FN, prevalece sobre estas cifras.
+
+## 8. Excepción documentada: r7 (INT8 podado)
+Los criterios de la sección 7 **se mantienen sin cambios**. r7 no los cumple en test y se adopta como excepción decidida por el equipo.
+
+| Métrica (test, 504 imgs) | Criterio INT8 podado | r7 | Cumple |
+|---|---|---|---|
+| Exactitud | >= 93.7 % (472) | 95.04 % (479) | sí |
+| FN | <= 12 | 15 (14 hentai, 1 porn) | **no** |
+| FP | <= 20 | 10 | sí |
+| Cambios de veredicto vs. benchmark | <= 20 | 25 (18 NSFW→SFW, 7 SFW→NSFW) | **no** |
+
+Referencias en test: benchmark fp16 95.24 % / 9 FN / 15 FP; INT8 sin podar 95.24 % / 10 FN / 14 FP / 2 cambios.
+
+**Modelo:** r7 = 8 de 12 cabezas por bloque, neuronas SwiGLU 1232 de 2048 (bloque 1 protegido), 64.9 % de las operaciones del original,
+destilación desde el original; checkpoint `quant/ckpt/r7_heads33_neur40.pt`, calibración `quant/calib_r7/`.
+
+**Evidencia en validación** (`val_holdout.csv`, 1000 imgs, nunca usadas antes; modelo entero congelado):
+
+| Modelo | Ops | Acc | FN | FP |
+|---|---|---|---|---|
+| Original flotante | 100 % | 95.4 % | 17 | 29 |
+| INT8 sin podar | 100 % | 95.6 % | 19 | 25 |
+| r5 (solo neuronas, 68.7 %) | 68.7 % | 95.2 % | 26 | 22 |
+| r7 | 64.9 % | 95.3 % | 19 | 28 |
+
+**Motivo:** la reducción de ~35 % de las operaciones puede acelerar el acelerador, y el FN de r7 (15 en test) sigue muy por debajo del de la CNN GantMan
+rechazada en el benchmark (31) y comparable a LlavaGuard (21). En validación r7 iguala en FN al INT8 sin podar.
+
+**Riesgos reconocidos:**
+- Test se midió para r7 y para el INT8 sin podar antes de cerrar la decisión (regla 3); r7 se eligió por validación y la comparación r5/r7 se hizo en `val_holdout`, no en test.
+- La validación no anticipó el resultado en test (9 cambios de veredicto en val[:500] frente a 25 en test); los FN suben en hentai (8 → 14).
+- La regla 4 pide entregar el INT8 sin podar si ningún recorte cumple; esta excepción la reemplaza para r7. El INT8 sin podar sigue disponible como respaldo.
+- Si existe un requisito externo de FN, prevalece sobre esta excepción (regla 5).
