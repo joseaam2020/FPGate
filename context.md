@@ -234,3 +234,8 @@ Decisión: r7 como modelo E1 podado, con excepción documentada al criterio orig
 Archivos: `weights_i8.bin` 55.3 MB, `epilogue_i32.bin` 0.8 MB (sesgo, M0, shift), `epilogue_f64.bin`, `tables.bin` (exp, recíproco, SiLU por bloque, RoPE Q1.14), `hps_f32.bin` 3.4 MB; total 59.8 MB.
 Vectores: 20 imágenes de `val_holdout` (CHW float32), logits esperados y SHA-256 de intermedios; intermedios completos de la imagen 0 en bloques 0 y 11.
 Verificación: 20/20 vectores con logits idénticos bit a bit (log en `quant/logs/export_check_r7.log`).
+
+## 11. Comparación y perfil (`quant/compare.py`, `quant/profile_model.py`)
+`docker compose run --rm torch quant/compare.py` lee solo archivos y escribe `quant/results/comparison/` (`comparison.md`, `comparison.html`, CSV por tabla): A rondas en val[:500], B holdout con FN/FP por clase, C test con modelos del benchmark, D perfil.
+`profile_model.py` mide MACs, parámetros, MB y latencia de float_ref FP32 (GTX 1650 y CPU 8 hilos) y escribe `quant/results/profile.json`. No es la latencia del acelerador.
+Resultado: r7 = 69.6 GMACs (65.1 % del original con patch_embed y cabeza), 56.2 M parámetros, 52.7 MB INT8 en GEMM; latencia de software 207 → 126 ms en GPU (-39 %) y 2084 → 1434 ms en CPU (-31 %).
