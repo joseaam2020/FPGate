@@ -68,13 +68,14 @@ build/prep_tool: tests/unit/prep_tool.c $(PREP_SRC) $(wildcard src/*.h)
 	$(CC) $(CSTD) $(WARN) -O1 -g -fsanitize=address,undefined -Isrc -I$(DEPS)/include \
 	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread -o $@
 
-test: asan build/proto_dump build/prep_tool build/test_accept
+test: asan build/proto_dump build/prep_tool build/test_accept build/mock_accel
 	python3 tests/mock_accel/test_mock_accel.py build/proto_dump
 	build/test_accept
 	python3 tests/unit/test_prep.py build/prep_tool
 	bash tests/integration/test_http.sh build/asan/fpgate-proxy
 	bash tests/integration/test_images.sh build/asan/fpgate-proxy
 	bash tests/integration/test_workers.sh build/asan/fpgate-proxy
+	bash tests/integration/test_accel.sh build/asan/fpgate-proxy build/prep_tool build/mock_accel
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 
 clean:
@@ -86,3 +87,12 @@ build/arm/prep_tool: tests/unit/prep_tool.c $(PREP_SRC) $(wildcard src/*.h)
 	@mkdir -p $(@D)
 	arm-linux-musleabihf-gcc $(CSTD) $(WARN) -O2 -static -Isrc -I$(DEPS)/include \
 	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread -o $@
+
+# A tiny accelerator stand-in that runs on the board (the Python mock does not).
+build/mock_accel: tests/mock_accel/mock_accel.c src/accel_proto.h
+	@mkdir -p $(@D)
+	$(CC) $(CSTD) $(WARN) -O2 -Isrc $< -o $@
+
+build/arm/mock_accel: tests/mock_accel/mock_accel.c src/accel_proto.h
+	@mkdir -p $(@D)
+	arm-linux-musleabihf-gcc $(CSTD) $(WARN) -O2 -static -Isrc $< -o $@

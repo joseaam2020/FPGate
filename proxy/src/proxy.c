@@ -884,6 +884,15 @@ static void accept_clients(conn_t *l)
     }
 }
 
+static accel_cfg_t g_accel_cfg;
+static int g_accel_on;
+
+void proxy_set_accel(const accel_cfg_t *cfg)
+{
+    g_accel_cfg = *cfg;
+    g_accel_on = cfg->path != NULL;
+}
+
 int proxy_run(int port, volatile sig_atomic_t *stop)
 {
     int lfd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -948,6 +957,26 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
     fprintf(stderr, "fpgate-proxy listening on :%d (%d decode worker%s)\n", port,
             dp_active() ? icfg->workers : 0, icfg->workers == 1 ? "" : "s");
 
+    inspect_set_ready(on_inspect_ready);
+    if (icfg->classify && !dp_active()) {
+        fprintf(stderr, "classification needs the decode workers, which could not start\n");
+        close(g_ep);
+        close(lfd);
+        return -1;
+    }
+    if (g_accel_on) {
+        if (accel_start(&g_accel_cfg, g_ep) != 0) {
+            fprintf(stderr, "cannot use the accelerator socket %s\n", g_accel_cfg.path);
+            dp_stop();
+            close(g_ep);
+            close(lfd);
+            return -1;
+        }
+        fprintf(stderr, "accelerator: %s  threshold %.2f  timeout %ums  queue %u\n",
+                g_accel_cfg.path, (double)icfg->threshold, accel_config()->timeout_ms,
+                accel_config()->queue_max);
+    }
+
     struct epoll_event evs[64];
     time_t last_sweep = time(NULL);
     while (!*stop) {
@@ -958,9 +987,12 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
                 accept_clients(&listener);
             else if (c == &pool)
                 inspect_collect(on_inspect_ready);
+            else if ((void *)c == accel_tag())
+                accel_on_event(evs[i].events);
             else
                 on_event(c, evs[i].events);
         }
+        accel_tick();
         time_t now = time(NULL);
         if (now != last_sweep) {
             last_sweep = now;
@@ -978,6 +1010,7 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
     reap_dead();                    /* frees the inspectors: pending results become orphans */
     dp_stop();
     inspect_collect(on_inspect_ready);
+    accel_stop();                   /* answers what is still pending; the owners are gone */
     close(g_ep);
     close(lfd);
     return 0;

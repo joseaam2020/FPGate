@@ -126,6 +126,30 @@ Por el proxy, JPEG 1280x575 por HTTPS interceptado: `prep=92.0ms` en el log, 200
 - El presupuesto de retencion es global y fijo (64 MiB); la concurrencia maxima de imagenes en vuelo no esta limitada de otra forma (decision #8 sigue abierta en este punto).
 - Fuzzing del detector, del framing y de los decodificadores: pendiente.
 
+## DES-3.3 Veredicto del acelerador, sustitucion y modo degradado (2026-11-07)
+
+Se activa con `--accel RUTA_DEL_SOCKET`; sin esa opcion el proxy solo analiza y registra, y entrega siempre la imagen original. Probado contra el mock (`tests/integration/test_accel.sh`, 55 comprobaciones bajo ASan/UBSan).
+
+**Flujo**: respuesta de imagen retenida -> hilo de decodificacion -> tensor RGB 448x448 -> cliente del acelerador (`src/accel_client.c`) -> veredicto -> se entrega la original o el reemplazo, y despues lo que haya llegado detras. Una linea `VERDICT` por imagen: `verdict=allow|block reason=... score=... threshold=... accel=Nms prep=Nms total=Nms` (`total` = desde que llega la cabecera de la respuesta hasta la decision; sirve para medir RR-04, separando preprocesamiento y espera del acelerador).
+
+**Decision**: `score_nsfw >= umbral` (por defecto 0.50, `--threshold`) reemplaza. El tensor que recibe el acelerador es byte a byte el que produce `prep_tool` (verificado con el hash que registra el mock).
+
+**Cliente del acelerador**: una peticion en vuelo (el acelerador procesa una imagen a la vez) y una cola FIFO acotada (`--queue-max`, 8 por defecto); si esta llena la imagen se resuelve al instante como `queue_full`, sin esperar. Timeout por peticion desde que se envia (`--accel-timeout-ms`, 10000 por defecto: mayor que la latencia maxima estimada de 3-7 s -- decision #7). Tras un timeout se **cierra la conexion**, asi una respuesta tardia nunca puede confundirse con la de otra imagen; ademas cada respuesta se valida por `request_id`. Cada peticion recibe exactamente una respuesta por su callback (resultado, error, timeout, caido, cola llena, cancelada) y el tensor se borra con `explicit_bzero` en cuanto se envia.
+
+**Modo degradado**: entra ante fallo de conexion, timeout, enlace roto o estado `HW_ERROR`/`DEGRADED`. Mientras dura, las imagenes se resuelven de inmediato como `accel_down` (no se envia nada) y cada `--probe` (2 s) se pregunta `status`; **solo `OK` devuelve a modo normal** (un `BUSY` indica acelerador ocupado o atascado y se sigue degradado). Verificado: error, conexion cortada, acelerador colgado y reinicio del acelerador, con recuperacion automatica.
+
+**Politicas** (RF-14 y decision #6):
+- `--on-failure` (acelerador caido/lento/con error, cola de decodificacion llena): **block** por defecto.
+- `--on-corrupt` (imagen danada o truncada): **block** por defecto.
+- `--on-unexamined` (GIF, WebP animado, AVIF no negociado, mas de 16 MP, no es imagen): **allow** por defecto, para no romper sitios.
+- Siguen pasando sin analizar y sin posibilidad de bloqueo (agujero conocido, registrado como `skipped=...`): imagenes mayores que `-L`, `206`, con `Content-Encoding`, o cuando se agota el presupuesto de memoria. Bloquearlas exige descartar el cuerpo restante de la respuesta, que hoy no se retiene.
+
+**Reemplazo** (`src/substitute.c`): una respuesta `200` nueva con una imagen, **nunca** las cabeceras de la original (sin `ETag`, `Last-Modified`, `Content-Encoding`), con `Cache-Control: no-store` y `X-FPGate-Block: <motivo>`, y `Connection: close` si la original cerraba. Por defecto es un PNG gris con borde y cruz, generado a las dimensiones de la original (reducidas a 800 px como maximo, conservando la proporcion; pesa unos cientos de bytes) para que el diseno de la pagina no salte. `--substitute ARCHIVO` pone una imagen propia (JPEG/PNG/WebP, hasta 2 MiB, validada al arrancar), que se envia tal cual (RU-03, RU-04).
+
+**Decision #8 (concurrencia)**: hasta `--queue-max` imagenes esperando mas una en vuelo; el resto se bloquea (o se permite, segun `--on-failure`) al instante. El trafico que no es imagen no se ve afectado (verificado: 0.00x s con la cola llena).
+
+**Pendientes de DES-3.3**: umbral y politicas aun por CLI (pasaran al TOML en DES-3.4); el log de bloqueos va a stderr (la bitacora SQLite es DES-3.4); no hay cache de veredictos por hash ni filtro por tamano minimo (un 16x16 gasta lo mismo que una foto de 12 MP), por decidir con datos de la placa; la espera hasta 10 s por imagen la ve el navegador como una imagen lenta.
+
 ## #2 Parser HTTP — CERRADA: picohttpparser
 
 - Vendorizado en `third_party/picohttpparser` (commit en `COMMIT`). Un solo .c/.h, sin dependencias, parsing incremental (`-2` = incompleto).

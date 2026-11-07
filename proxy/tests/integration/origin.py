@@ -12,6 +12,7 @@ usage: origin.py PORT [CERT KEY]    (TLS when CERT and KEY are given)
     ct=TYPE|none                    Content-Type override (default: from the extension)
     status=200|206|304
     enc=gzip                        adds a Content-Encoding header
+    etag=1                          adds ETag and Last-Modified
     slow=1                          half of the body now, the rest two seconds later
 HEAD is supported everywhere.
 """
@@ -55,6 +56,8 @@ class H(BaseHTTPRequestHandler):
             lines.append(f"Content-Type: {ct}")
         if "enc" in q:
             lines.append(f"Content-Encoding: {q['enc']}")
+        if "etag" in q:
+            lines += ['ETag: "abc123"', "Last-Modified: Sat, 01 Nov 2025 00:00:00 GMT"]
         if mode == "close":
             lines.append("Connection: close")
             self.close_connection = True

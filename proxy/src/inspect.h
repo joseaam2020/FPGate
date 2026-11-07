@@ -23,6 +23,8 @@
  * Held images are bounded per image and globally, and zeroed when released.
  */
 
+typedef enum { POLICY_ALLOW = 0, POLICY_BLOCK = 1 } inspect_policy_t;
+
 typedef struct {
     int enabled;                /* 0: pure forwarding, no HTTP parsing at all */
     size_t max_bytes;           /* largest image analysed; bigger ones stream */
@@ -31,6 +33,11 @@ typedef struct {
     int workers;                /* decode threads; 0 decodes inline in the event loop */
     unsigned delay_ms;          /* test hook: extra delay per decode job */
     int verbose;                /* log the path and Referer of every response, not only images */
+    int classify;               /* 1: ask fpgate-accel and act on its answer; 0: only analyse */
+    float threshold;            /* score_nsfw >= threshold is replaced */
+    inspect_policy_t on_failure;    /* accelerator down, slow, erroring, or everything queued */
+    inspect_policy_t on_unexamined; /* decodes fine but cannot be judged: GIF, AVIF, too many pixels */
+    inspect_policy_t on_corrupt;    /* damaged or truncated image */
 } inspect_cfg_t;
 
 typedef struct {
@@ -39,6 +46,8 @@ typedef struct {
     unsigned long corrupt, unsupported_format, too_many_pixels, not_an_image;
     unsigned long skipped_oversize, skipped_budget, skipped_encoded, skipped_partial, skipped_busy;
     unsigned long accept_rewritten;   /* requests whose Accept lost its image/avif entry */
+    unsigned long allowed, blocked;
+    unsigned long blocked_nsfw, blocked_failure, blocked_corrupt, blocked_unexamined;
     double prep_ms_total, prep_ms_max;
 } inspect_stats_t;
 
@@ -78,12 +87,18 @@ int inspect_wants_requests(const inspect_t *i);
 int inspect_busy(const inspect_t *i);
 
 /*
+ * Where the bytes of a pair that was waiting for a worker or the accelerator go.
+ * Set once at start-up; it is also used when the accelerator answers.
+ */
+typedef void (*inspect_ready_fn)(void *ctx, buf_t *out, int error);
+void inspect_set_ready(inspect_ready_fn ready);
+
+/*
  * Collects finished decode jobs. For each one whose pair is still alive,
  * `ready` receives the bytes to forward to the client (the released image and
  * whatever queued behind it) and `error` is non-zero if the pair must be
  * closed. Call when the pool's eventfd is readable.
  */
-typedef void (*inspect_ready_fn)(void *ctx, buf_t *out, int error);
 void inspect_collect(inspect_ready_fn ready);
 
 #endif

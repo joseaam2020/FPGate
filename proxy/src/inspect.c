@@ -8,9 +8,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "accel_client.h"
 #include "decode_pool.h"
 #include "http_stream.h"
 #include "image_detect.h"
+#include "substitute.h"
 
 static inspect_cfg_t g_cfg = {
     .enabled = 1,
@@ -18,9 +20,16 @@ static inspect_cfg_t g_cfg = {
     .budget_bytes = 64u * 1024 * 1024,
     .prep = { .size = 448, .center_crop = 1, .dct_scaling = 0, .max_pixels = 16000000ul },
     .workers = 1,
+    .threshold = 0.50f,
+    .on_failure = POLICY_BLOCK,         /* RF-14: when in doubt, block */
+    .on_unexamined = POLICY_ALLOW,
+    .on_corrupt = POLICY_BLOCK,
 };
 static inspect_stats_t g_stats;
 static size_t g_held;                   /* bytes currently held, all connections */
+static inspect_ready_fn g_ready;
+
+void inspect_set_ready(inspect_ready_fn ready) { g_ready = ready; }
 
 void inspect_configure(const inspect_cfg_t *cfg) { g_cfg = *cfg; }
 const inspect_cfg_t *inspect_config(void) { return &g_cfg; }
@@ -93,6 +102,11 @@ typedef struct ijob {
     buf_t head, braw, bdata;
     size_t held;
     int chunked;
+    int close_conn;                     /* the original response asked to close */
+    int src_w, src_h;                   /* of the decoded image, for the replacement */
+    double prep_ms;
+    double t0;                          /* when the response head arrived */
+    int accel_pending;                  /* a request for this job is with the accelerator client */
 } ijob_t;
 
 struct inspect {
@@ -106,6 +120,8 @@ struct inspect {
     char cur_type[48];                  /* its Content-Type, for the log */
     char cur_size[24];                  /* its size or framing, for the log */
     int cur_status;
+    int cur_close;                      /* the response asked to close the connection */
+    double cur_t0;                      /* when its head arrived */
     buf_t *out;                         /* where forwardable bytes go during a feed */
     int oom;
     int mode;
@@ -207,10 +223,77 @@ static void log_skip(const inspect_t *i, const char *type, const char *reason, c
             ctx_suffix(sfx, sizeof sfx, &i->cur));
 }
 
+/* ---- verdicts ------------------------------------------------------------------ */
+
+typedef enum { V_ALLOW, V_BLOCK } verdict_t;
+/* Why a verdict was reached, which decides the policy that applies. */
+typedef enum { C_NSFW, C_FAILURE, C_CORRUPT, C_UNEXAMINED } vclass_t;
+
+static verdict_t policy_verdict(vclass_t c)
+{
+    inspect_policy_t p = c == C_FAILURE ? g_cfg.on_failure
+                         : c == C_CORRUPT ? g_cfg.on_corrupt : g_cfg.on_unexamined;
+    return p == POLICY_BLOCK ? V_BLOCK : V_ALLOW;
+}
+
+static void count_verdict(verdict_t v, vclass_t c)
+{
+    if (v == V_ALLOW) {
+        g_stats.allowed++;
+        return;
+    }
+    g_stats.blocked++;
+    switch (c) {
+    case C_NSFW:      g_stats.blocked_nsfw++; break;
+    case C_FAILURE:   g_stats.blocked_failure++; break;
+    case C_CORRUPT:   g_stats.blocked_corrupt++; break;
+    default:          g_stats.blocked_unexamined++; break;
+    }
+}
+
+static void log_verdict(const char *host, const struct rctx *c, verdict_t v, const char *reason,
+                        const accel_result_t *res, double prep_ms, double total_ms)
+{
+    char sfx[300], sc[96] = "";
+    if (res && res->outcome == ACCEL_R_OK)
+        snprintf(sc, sizeof sc, " score=%.3f threshold=%.2f accel=%ums", (double)res->score,
+                 (double)g_cfg.threshold, res->wait_ms);
+    fprintf(stderr, "VERDICT host=%s verdict=%s reason=%s%s prep=%.0fms total=%.0fms%s\n", host,
+            v == V_ALLOW ? "allow" : "block", reason, sc, prep_ms, total_ms,
+            ctx_suffix(sfx, sizeof sfx, c));
+}
+
+/* Writes the stand-in for a blocked image. Returns 0, or -1 on out of memory. */
+static int emit_replacement(buf_t *dst, int w, int h, int close_conn, const char *reason)
+{
+    buf_t sub = {0};
+    int rc = substitute_response(&sub, w, h, close_conn, reason);
+    if (rc == 0 && sub.len && buf_append(dst, sub.p, sub.len) != 0)
+        rc = -1;
+    buf_free(&sub);
+    return rc;
+}
+
+/* Settles a held image on the spot, with no worker or accelerator involved. */
+static void settle_now(inspect_t *i, vclass_t c, const char *reason)
+{
+    verdict_t v = policy_verdict(c);
+    count_verdict(v, c);
+    log_verdict(i->host, &i->cur, v, reason, NULL, 0, now_ms() - i->cur_t0);
+    if (v == V_ALLOW) {
+        release_held(i);
+        return;
+    }
+    if (emit_replacement(i->out, 0, 0, i->cur_close, reason) != 0)
+        i->oom = 1;
+    drop_held(i);
+}
+
 /*
- * The message is complete. JPEG/PNG go to a worker and the pair waits; anything
- * else is settled on the spot. Either way the original is what gets delivered
- * until DES-3.3 adds the accelerator's verdict.
+ * The message is complete. JPEG/PNG/WebP go to a worker and the pair waits; the
+ * outcome comes back through inspect_collect() and, when an accelerator is
+ * configured, through its verdict. Anything else is settled on the spot.
+ * Without an accelerator the original is always what gets delivered.
  */
 static void analyse(inspect_t *i)
 {
@@ -232,6 +315,8 @@ static void analyse(inspect_t *i)
                     /* The heap blocks stay where they are; only their owner changes. */
                     j->owner = i;
                     j->chunked = i->chunked;
+                    j->close_conn = i->cur_close;
+                    j->t0 = i->cur_t0;
                     snprintf(j->host, sizeof j->host, "%s", i->host);
                     j->ctx = i->cur;
                     j->head = i->head;
@@ -250,11 +335,15 @@ static void analyse(inspect_t *i)
                 }
                 free(j);
             }
-            g_stats.skipped_busy++;             /* queue full: let it through unexamined */
+            g_stats.skipped_busy++;             /* decode queue full */
             {
                 char sfx[300];
                 fprintf(stderr, "IMG host=%s kind=%s bytes=%zu skipped=busy%s\n", i->host,
                         image_kind_name(kind), n, ctx_suffix(sfx, sizeof sfx, &i->cur));
+            }
+            if (g_cfg.classify) {
+                settle_now(i, C_FAILURE, "busy");
+                return;
             }
         } else {
             prep_result_t r;
@@ -278,8 +367,12 @@ static void analyse(inspect_t *i)
             fprintf(stderr, "IMG host=%s kind=unknown type=%s bytes=%zu error=not_an_image%s\n",
                     i->host, i->cur_type, n, sfx);
         }
+        if (g_cfg.classify) {
+            settle_now(i, C_UNEXAMINED, kind == IMG_OTHER ? "unsupported_format" : "not_an_image");
+            return;
+        }
     }
-    release_held(i);                    /* verdict for now: deliver the original */
+    release_held(i);                    /* no accelerator: deliver the original */
 }
 
 /* ---- response callbacks ------------------------------------------------------ */
@@ -292,6 +385,28 @@ static void log_resp(const inspect_t *i, const char *action)
     fprintf(stderr, "RESP host=%s status=%d type=%s bytes=%s action=%s%s\n", i->host, i->cur_status,
             i->cur_type[0] ? i->cur_type : "-", i->cur_size, action,
             ctx_suffix(sfx, sizeof sfx, &i->cur));
+}
+
+static int has_token(const char *v, size_t n, const char *tok)
+{
+    size_t tl = strlen(tok);
+    for (size_t k = 0; k + tl <= n; k++)
+        if (strncasecmp(v + k, tok, tl) == 0)
+            return 1;
+    return 0;
+}
+
+/* Will the connection close after this response? */
+static int wants_close(const hs_head_t *h)
+{
+    const struct phr_header *c = find_header(h, "connection");
+    if (c) {
+        if (has_token(c->value, c->value_len, "close"))
+            return 1;
+        if (has_token(c->value, c->value_len, "keep-alive"))
+            return 0;
+    }
+    return h->minor == 0;
 }
 
 static void ctx_pop(inspect_t *i)
@@ -318,6 +433,8 @@ static void resp_head(void *u, const hs_head_t *h)
 {
     inspect_t *i = u;
     i->mode = M_STREAM;
+    i->cur_t0 = now_ms();
+    i->cur_close = wants_close(h);
 
     if (h->status >= 200)
         ctx_pop(i);                     /* 1xx are interim: the real answer is still to come */
@@ -537,8 +654,13 @@ void inspect_free(inspect_t *i)
 {
     if (!i)
         return;
-    if (i->job)
-        i->job->owner = NULL;           /* the worker's result will be discarded */
+    if (i->job) {
+        ijob_t *j = i->job;
+        i->job = NULL;
+        j->owner = NULL;                /* the worker's or the accelerator's answer is discarded */
+        if (j->accel_pending)
+            accel_cancel(j);            /* may release j right away */
+    }
     drop_held(i);
     buf_wipe_free(&i->backlog);
     hs_free(i->req);
@@ -628,36 +750,105 @@ static int pump(inspect_t *i)
     return i->oom ? -1 : 0;
 }
 
+/*
+ * A job is over: deliver the original or its replacement, then whatever queued
+ * behind it. The job is released here. `res` is the accelerator's answer, if any.
+ */
+static void finish_job(ijob_t *j, verdict_t v, vclass_t c, const char *reason,
+                       const accel_result_t *res)
+{
+    inspect_t *i = j->owner;
+    if (g_cfg.classify) {
+        count_verdict(v, c);
+        log_verdict(j->host, &j->ctx, v, reason, res, j->prep_ms, now_ms() - j->t0);
+    }
+    buf_t out = {0};
+    i->out = &out;
+    i->job = NULL;
+    i->waiting = 0;
+    hs_resume(i->resp);
+    if (v == V_ALLOW) {
+        emit(i, j->head.p, j->head.len);    /* the original, unchanged */
+        emit(i, j->braw.p, j->braw.len);
+    } else if (emit_replacement(&out, j->src_w, j->src_h, j->close_conn, reason) != 0) {
+        i->oom = 1;
+    }
+    wipe_job(j);
+    free(j);
+    int err = pump(i);
+    if (g_ready)
+        g_ready(i->ctx, &out, err);
+    buf_wipe_free(&out);
+}
+
+/* The accelerator client answered (possibly before accel_classify() returned). */
+static void on_accel_done(void *user, const accel_result_t *res)
+{
+    ijob_t *j = user;
+    j->accel_pending = 0;
+    if (!j->owner) {                    /* the connection is gone: nobody to answer */
+        wipe_job(j);
+        free(j);
+        return;
+    }
+    verdict_t v;
+    vclass_t c;
+    const char *reason;
+    switch (res->outcome) {
+    case ACCEL_R_OK:
+        c = C_NSFW;
+        v = res->score >= g_cfg.threshold ? V_BLOCK : V_ALLOW;
+        reason = v == V_BLOCK ? "nsfw" : "below_threshold";
+        break;
+    case ACCEL_R_TIMEOUT:    c = C_FAILURE; reason = "accel_timeout"; v = policy_verdict(c); break;
+    case ACCEL_R_DOWN:       c = C_FAILURE; reason = "accel_down";    v = policy_verdict(c); break;
+    case ACCEL_R_QUEUE_FULL: c = C_FAILURE; reason = "queue_full";    v = policy_verdict(c); break;
+    case ACCEL_R_CANCELLED:  c = C_FAILURE; reason = "cancelled";     v = policy_verdict(c); break;
+    default:                 c = C_FAILURE; reason = "accel_error";   v = policy_verdict(c); break;
+    }
+    finish_job(j, v, c, reason, res);
+}
+
 void inspect_collect(inspect_ready_fn ready)
 {
+    if (ready)
+        g_ready = ready;
     dp_job_t *dj;
     while ((dj = dp_take_done())) {
         ijob_t *j = dj->user;
         size_t n = j->chunked ? j->bdata.len : j->braw.len;
 
         record_result(j->host, &j->ctx, dj->kind, n, dj->status, &dj->result, dj->ms);
-        if (dj->status == PREP_OK) {
-            /* DES-3.3: dj->result.rgb goes to fpgate-accel here and its score decides. */
-            prep_result_free(&dj->result);
-        }
 
         inspect_t *i = j->owner;
         if (!i) {                       /* the connection died while the worker ran */
+            if (dj->status == PREP_OK)
+                prep_result_free(&dj->result);
             wipe_job(j);
             free(j);
             continue;
         }
-        buf_t out = {0};
-        i->out = &out;
-        i->job = NULL;
-        i->waiting = 0;
-        hs_resume(i->resp);
-        emit(i, j->head.p, j->head.len);    /* the original, unchanged */
-        emit(i, j->braw.p, j->braw.len);
-        wipe_job(j);
-        free(j);
-        int err = pump(i);
-        ready(i->ctx, &out, err);
-        buf_wipe_free(&out);
+        j->prep_ms = dj->ms;
+        j->src_w = dj->result.src_w;
+        j->src_h = dj->result.src_h;
+
+        if (!g_cfg.classify) {          /* analysis only: nothing is judged */
+            if (dj->status == PREP_OK)
+                prep_result_free(&dj->result);
+            finish_job(j, V_ALLOW, C_NSFW, NULL, NULL);
+            continue;
+        }
+        if (dj->status == PREP_OK) {
+            /* The tensor now belongs to the accelerator client. */
+            uint8_t *rgb = dj->result.rgb;
+            size_t len = dj->result.rgb_len;
+            dj->result.rgb = NULL;
+            j->accel_pending = 1;
+            accel_classify(rgb, len, g_cfg.prep.size, g_cfg.prep.size, on_accel_done, j);
+            continue;                   /* j may already be gone if the answer was immediate */
+        }
+        vclass_t c = dj->status == PREP_CORRUPT ? C_CORRUPT
+                     : dj->status == PREP_NOMEM ? C_FAILURE : C_UNEXAMINED;
+        finish_job(j, policy_verdict(c), c, prep_status_name(dj->status), NULL);
     }
 }
