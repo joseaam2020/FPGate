@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds zlib, libpng and libjpeg-turbo as static libraries for the native
+# Builds zlib, libpng, libjpeg-turbo and libwebp as static libraries for the native
 # host (/opt/deps/native) and for the HPS (/opt/deps/arm, musl, NEON).
 # Source URLs and hashes come from the environment (see the Dockerfile).
 set -e
@@ -14,10 +14,12 @@ mkdir -p $W
 fetch "$ZLIB_URL"   "$ZLIB_SHA256"   $W/zlib.tar.gz
 fetch "$LIBPNG_URL" "$LIBPNG_SHA256" $W/libpng.tar.xz
 fetch "$LIBJPEG_URL" "$LIBJPEG_SHA256" $W/libjpeg.tar.gz
-mkdir $W/zlib $W/libpng $W/libjpeg
+fetch "$LIBWEBP_URL" "$LIBWEBP_SHA256" $W/libwebp.tar.gz
+mkdir $W/zlib $W/libpng $W/libjpeg $W/libwebp
 tar -xzf $W/zlib.tar.gz    -C $W/zlib    --strip-components=1
 tar -xJf $W/libpng.tar.xz  -C $W/libpng  --strip-components=1
 tar -xzf $W/libjpeg.tar.gz -C $W/libjpeg --strip-components=1
+tar -xzf $W/libwebp.tar.gz -C $W/libwebp --strip-components=1
 
 for T in native arm; do
     P=/opt/deps/$T
@@ -56,6 +58,15 @@ EOF
          -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_INSTALL_LIBDIR=lib \
          -DENABLE_SHARED=0 -DENABLE_STATIC=1 -DWITH_TURBOJPEG=0 -DWITH_JAVA=0 \
          -DREQUIRE_SIMD=1 -DCMAKE_POSITION_INDEPENDENT_CODE=1 >/dev/null
+     make -j"$(nproc)" >/dev/null && make install >/dev/null)
+    # libwebp (decoder only is used; the tools and the encoder front-ends are not built)
+    rm -rf $W/webp-build-$T && mkdir $W/webp-build-$T
+    (cd $W/webp-build-$T && cmake $W/libwebp $JPEG_TOOLCHAIN \
+         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$P -DCMAKE_INSTALL_LIBDIR=lib \
+         -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=1 \
+         -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF \
+         -DWEBP_BUILD_GIF2WEBP=OFF -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF \
+         -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF -DWEBP_BUILD_EXTRAS=OFF >/dev/null
      make -j"$(nproc)" >/dev/null && make install >/dev/null)
     unset CC AR RANLIB
 done

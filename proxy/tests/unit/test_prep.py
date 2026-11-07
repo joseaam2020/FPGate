@@ -154,6 +154,23 @@ def main():
     compare("png interlaced (Adam7) 333x211 -> 448 crop", p, 448, "crop")
     compare("png interlaced (Adam7) 333x211 -> 224 squash", p, 224, "squash")
 
+    # --- WebP: the format most of the web sends to Chrome --------------------------
+    rgba_w = photo(500, 400, 30).convert("RGBA")
+    rgba_w.putalpha(Image.frombytes("L", (500, 400), rnd.randbytes(500 * 400)))
+    webp_cases = [
+        ("lossy 640x480", photo(640, 480, 31), dict(quality=80)),
+        ("lossy 1000x600", photo(1000, 600, 32), dict(quality=75)),
+        ("lossy portrait 300x700", photo(300, 700, 33), dict(quality=85)),
+        ("lossless 400x300", photo(400, 300, 34), dict(lossless=True)),
+        ("lossy with alpha", rgba_w, dict(quality=80)),
+        ("lossless with alpha", rgba_w, dict(lossless=True)),
+        ("tiny 17x23", photo(17, 23, 35), dict(quality=70)),
+    ]
+    for label, im, kw in webp_cases:
+        path = save(im, "t.webp", **kw)
+        for size, mode in ((448, "crop"), (224, "squash")):
+            compare(f"webp {label} -> {size} {mode}", path, size, mode)
+
     # --- DCT scaling: not bit-exact, but must stay close ----------------------
     big = save(photo(3000, 2000, 10), "big.jpg", quality=88)
     rc, scaled, err = run_tool(big, 448, "crop", dct=1)
@@ -176,6 +193,14 @@ def main():
     bad = bytearray(png)
     bad[len(bad) // 2] ^= 0xFF
     check("PNG with a flipped byte (bad CRC) is corrupt", tool_on(bytes(bad)) == 3)
+    webp = open(save(photo(640, 480, 36), "c.webp", quality=80), "rb").read()
+    check("truncated WebP is reported corrupt", tool_on(webp[: len(webp) // 2], "t.webp") == 3)
+    check("WebP magic followed by garbage is corrupt",
+          tool_on(b"RIFF\x40\x00\x00\x00WEBPVP8 " + os.urandom(100), "g.webp") == 3)
+    frames = [photo(64, 64, 40 + k) for k in range(3)]
+    anim = os.path.join(TMP, "anim.webp")
+    frames[0].save(anim, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    check("animated WebP is unsupported (stills only)", run_tool(anim, 448, "crop")[0] == 4)
     check("empty input is not an image", tool_on(b"") == 6)
     check("GIF is recognised but not decodable", tool_on(b"GIF89a" + bytes(64)) == 6)
 

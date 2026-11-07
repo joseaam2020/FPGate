@@ -70,7 +70,8 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 |---|---|---|
 | JPEG/PNG valido | decodificado y preprocesado, entregado | `decoded` |
 | JPEG/PNG danado o truncado | entregado, registrado como `corrupt` (no como bloqueo) | `corrupt` |
-| GIF, WebP, AVIF/HEIC, BMP | entregado, `unsupported_format` | `unsupported_format` |
+| WebP (imagen fija) | decodificado y preprocesado igual que JPEG/PNG | `decoded` |
+| WebP animado, GIF, AVIF/HEIC, BMP | entregado, `unsupported_format` | `unsupported_format` |
 | JPEG CMYK/YCCK o de 12 bits | entregado, `unsupported_format` | `unsupported_format` |
 | Mas de 16 MP (`max_pixels`) | entregado, `too_many_pixels` | `too_many_pixels` |
 | Mayor que `-L` (8 MiB) | se transmite sin retener | `skipped_oversize` |
@@ -89,7 +90,12 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 
 **Prueba con navegador**: el PC de desarrollo tiene Qustodio (control parental) instalado, que intercepta el HTTPS de los navegadores incluso a traves de un proxy explicito y rechaza la CA de FPGate (Chrome muestra `ERR_CERT_COMMON_NAME_INVALID` con certificados `verifyfail.*` emitidos por `Qustodio (15)`). Las pruebas con navegador se hacen desde otro equipo; `curl`/`openssl` no se ven afectados. Chrome se lanza con `--proxy-server` y un `--user-data-dir` propio para que solo esa instancia use el proxy.
 
-**Abierto**: ninguno de estos casos *bloquea* todavia; en DES-3.3 hay que decidir si WebP/GIF/AVIF y las imagenes danadas se bloquean (fail-closed, rompe muchos sitios porque WebP es muy comun) o se dejan pasar (hueco de contenido). Mi recomendacion: configurable, con "permitir" por defecto para formatos no soportados y "bloquear" para danadas. Decision de producto, no tecnica.
+**WebP y AVIF (decision #6, cerrada 2026-11-07)**: la primera prueba con Chrome real contra la portada de Wikipedia mostro que 18 de 20 imagenes de pixeles llegaban como WebP (las URL terminan en `.jpg`/`.png` pero el servidor negocia el formato con la cabecera `Accept`), asi que analizar solo JPEG/PNG dejaba casi toda la web fuera. Decision:
+- **Se decodifica WebP** (libwebp 1.5.0, solo el decodificador, estatico, NEON en ARM). Mismas reglas que el resto: alfa descartado sin componer, sin animaciones. Verificado byte a byte contra Pillow (lossy, lossless, con y sin alfa, 448 crop y 224 squash) y entre x86 y ARM+NEON.
+- **Se quita `image/avif` de la cabecera `Accept`** de las peticiones (HTTP en claro y tuneles interceptados), para que los servidores que negocian respondan WebP y no AVIF, que no decodificamos (`libavif` + `dav1d` son pesados para la A9). Es lo unico que el proxy modifica de una peticion; se cuenta en `accept_rewritten`. Es una excepcion deliberada a RF-08 (preservar encabezados) y se documentara en la guia de instalacion. Si el cliente solo aceptaba AVIF, `Accept` pasa a `*/*`.
+- Limite: un sitio que sirva AVIF sin negociar (o segun el User-Agent) seguira llegando como `unsupported_format`. El log lo mostrara.
+
+**Abierto**: ninguno de estos casos *bloquea* todavia; en DES-3.3 hay que decidir si los formatos que siguen sin decodificar (GIF, AVIF sin negociacion, WebP animado) y las imagenes danadas se bloquean (fail-closed) o se dejan pasar (hueco de contenido). Mi recomendacion: configurable, con "permitir" por defecto para formatos no soportados y "bloquear" para danadas. Decision de producto, no tecnica.
 
 **Decodificacion en hilos de trabajo** (`src/decode_pool.c`, `src/inspect.c`): medido en la placa, decodificar dentro del reactor lo detenia 90-540 ms por imagen y hasta ~1.3 s en el peor caso permitido, contra los 500 ms de RR-03 para el trafico sin imagenes. Ahora:
 - La decodificacion y el redimensionado corren en un pool de hilos (`-W n`, por defecto 1; `-W 0` decodifica dentro del reactor, util como referencia). El resultado vuelve al reactor por un `eventfd` registrado en epoll.

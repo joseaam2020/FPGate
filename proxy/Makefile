@@ -16,7 +16,7 @@ WARN     := -Wall -Wextra -Werror
 HARDEN   := -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
 CSTD     := -std=gnu11 -ffp-contract=off   # coefficients must not depend on FMA availability
 COMMON    = $(CSTD) $(WARN) -Isrc -I$(PHR) -I$(MBED)/include -I$(DEPS)/include -DBUILD_EPOCH=$(BUILD_EPOCH)
-LINK      = -L$(MBED)/lib -L$(DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lz -lm -lpthread
+LINK      = -L$(MBED)/lib -L$(DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread
 
 .PHONY: native arm asan ubsan test clean
 
@@ -57,15 +57,20 @@ build/proto_dump: tests/unit/proto_dump.c src/accel_proto.h
 	@mkdir -p $(@D)
 	$(CC) $(CSTD) $(WARN) -Isrc $< -o $@
 
+build/test_accept: tests/unit/test_accept.c src/image_detect.c src/image_detect.h
+	@mkdir -p $(@D)
+	$(CC) $(CSTD) $(WARN) -fsanitize=address,undefined -Isrc tests/unit/test_accept.c src/image_detect.c -o $@
+
 PREP_SRC := src/image_prep.c src/image_detect.c src/resample.c
 build/prep_tool: DEPS := $(DEPS_NATIVE)
 build/prep_tool: tests/unit/prep_tool.c $(PREP_SRC) $(wildcard src/*.h)
 	@mkdir -p $(@D)
 	$(CC) $(CSTD) $(WARN) -O1 -g -fsanitize=address,undefined -Isrc -I$(DEPS)/include \
-	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lz -lm -o $@
+	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread -o $@
 
-test: asan build/proto_dump build/prep_tool
+test: asan build/proto_dump build/prep_tool build/test_accept
 	python3 tests/mock_accel/test_mock_accel.py build/proto_dump
+	build/test_accept
 	python3 tests/unit/test_prep.py build/prep_tool
 	bash tests/integration/test_http.sh build/asan/fpgate-proxy
 	bash tests/integration/test_images.sh build/asan/fpgate-proxy
@@ -80,4 +85,4 @@ build/arm/prep_tool: DEPS := $(DEPS_ARM)
 build/arm/prep_tool: tests/unit/prep_tool.c $(PREP_SRC) $(wildcard src/*.h)
 	@mkdir -p $(@D)
 	arm-linux-musleabihf-gcc $(CSTD) $(WARN) -O2 -static -Isrc -I$(DEPS)/include \
-	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lz -lm -o $@
+	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread -o $@

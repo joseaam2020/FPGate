@@ -19,6 +19,7 @@
 #include "buf.h"
 #include "decode_pool.h"
 #include "http_stream.h"
+#include "image_detect.h"
 #include "inspect.h"
 #include "picohttpparser.h"
 #include "tls_mitm.h"
@@ -388,9 +389,19 @@ static int handle_request_head(conn_t *c)
         for (size_t i = 0; i < nh; i++) {
             if (is_hop_by_hop(&hs[i]))
                 continue;
+            const char *val = hs[i].value;
+            size_t val_len = hs[i].value_len;
+            char accept[1024];
+            size_t accept_len;
+            /* Servers that negotiate the image format must not answer AVIF: we decode WebP, not AVIF. */
+            if (hs[i].name_len == 6 && strncasecmp(hs[i].name, "accept", 6) == 0 &&
+                accept_drop_avif(val, val_len, accept, sizeof accept, &accept_len) == 1) {
+                val = accept;
+                val_len = accept_len;
+            }
             if (buf_append(&head, hs[i].name, hs[i].name_len) != 0 ||
                 buf_append(&head, ": ", 2) != 0 ||
-                buf_append(&head, hs[i].value, hs[i].value_len) != 0 ||
+                buf_append(&head, val, val_len) != 0 ||
                 buf_append(&head, "\r\n", 2) != 0)
                 goto fail_u;
         }

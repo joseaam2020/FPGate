@@ -42,7 +42,7 @@ int main(int argc, char **argv)
                                                 : 16000000ul,
     };
     img_kind_t kind = image_sniff(buf, (size_t)n);
-    if (kind != IMG_JPEG && kind != IMG_PNG) {
+    if (kind != IMG_JPEG && kind != IMG_PNG && kind != IMG_WEBP) {
         fprintf(stderr, "not a decodable image (%s)\n", image_kind_name(kind));
         free(buf);
         return 6;

@@ -38,6 +38,7 @@ typedef struct {
     unsigned long decoded;
     unsigned long corrupt, unsupported_format, too_many_pixels, not_an_image;
     unsigned long skipped_oversize, skipped_budget, skipped_encoded, skipped_partial, skipped_busy;
+    unsigned long accept_rewritten;   /* requests whose Accept lost its image/avif entry */
     double prep_ms_total, prep_ms_max;
 } inspect_stats_t;
 

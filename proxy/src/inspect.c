@@ -219,7 +219,7 @@ static void analyse(inspect_t *i)
     img_kind_t kind = image_sniff(img, n);
 
     g_stats.seen++;
-    if (kind == IMG_JPEG || kind == IMG_PNG) {
+    if (kind == IMG_JPEG || kind == IMG_PNG || kind == IMG_WEBP) {
         if (dp_active()) {
             ijob_t *j = calloc(1, sizeof *j);
             if (j) {
@@ -457,12 +457,38 @@ static void ctx_push(inspect_t *i, const char *path, size_t path_len, const char
     i->rq_count++;
 }
 
+/*
+ * Forwards a request head. The only edit: image/avif is removed from Accept so
+ * that servers fall back to WebP (decodable here) instead of AVIF (not).
+ */
+static void emit_request_head(inspect_t *i, const hs_head_t *h)
+{
+    for (size_t k = 0; k < h->nhdrs; k++) {
+        const struct phr_header *a = &h->hdrs[k];
+        if (!a->name || a->name_len != 6 || strncasecmp(a->name, "accept", 6) != 0)
+            continue;
+        if (a->value < h->raw || a->value + a->value_len > h->raw + h->raw_len)
+            continue;
+        char tmp[1024];
+        size_t tn;
+        if (accept_drop_avif(a->value, a->value_len, tmp, sizeof tmp, &tn) != 1)
+            continue;
+        size_t off = (size_t)(a->value - h->raw);
+        emit(i, h->raw, off);
+        emit(i, tmp, tn);
+        emit(i, h->raw + off + a->value_len, h->raw_len - off - a->value_len);
+        g_stats.accept_rewritten++;
+        return;
+    }
+    emit(i, h->raw, h->raw_len);
+}
+
 static void req_head(void *u, const hs_head_t *h)
 {
     inspect_t *i = u;
     const struct phr_header *rf = find_header(h, "referer");
     ctx_push(i, h->path, h->path_len, rf ? rf->value : NULL, rf ? rf->value_len : 0);
-    emit(i, h->raw, h->raw_len);
+    emit_request_head(i, h);
 }
 
 void inspect_note_request(inspect_t *i, const char *path, size_t path_len, const char *referer,

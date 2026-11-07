@@ -9,6 +9,7 @@
 #include <jerror.h>
 #include <jpeglib.h>
 #include <png.h>
+#include <webp/decode.h>
 
 #include "resample.h"
 
@@ -337,6 +338,53 @@ done:
     return st;
 }
 
+/* ---- WebP ------------------------------------------------------------- */
+
+static prep_status_t decode_webp(const uint8_t *data, size_t len, const prep_cfg_t *cfg,
+                                 prep_result_t *out)
+{
+    WebPBitstreamFeatures f;
+    VP8StatusCode vs = WebPGetFeatures(data, len, &f);
+    if (vs == VP8_STATUS_UNSUPPORTED_FEATURE)
+        return PREP_UNSUPPORTED;
+    if (vs != VP8_STATUS_OK)
+        return PREP_CORRUPT;            /* truncated or damaged header */
+    if (f.has_animation)
+        return PREP_UNSUPPORTED;        /* only still images, like JPEG and PNG */
+    if (f.width <= 0 || f.height <= 0 ||
+        (unsigned long)f.width * (unsigned long)f.height > cfg->max_pixels)
+        return PREP_TOO_LARGE;
+
+    int w = f.width, h = f.height;
+    out->src_w = w;
+    out->src_h = h;
+
+    /* Alpha is dropped without compositing, as PIL's convert("RGB") does. */
+    uint8_t *px = WebPDecodeRGB(data, len, &w, &h);
+    if (!px)
+        return PREP_CORRUPT;            /* the bitstream does not decode completely */
+
+    prep_status_t st = PREP_NOMEM;
+    size_t px_len = (size_t)w * (size_t)h * 3;
+    resizer_t *rs = rs_new(w, h, cfg->size, cfg->center_crop);
+    uint8_t *rgb = rs ? malloc((size_t)cfg->size * (size_t)cfg->size * 3) : NULL;
+    if (rs && rgb) {
+        for (int y = 0; y < h; y++)
+            rs_push_row(rs, px + (size_t)y * (size_t)w * 3);
+        if (rs_finish(rs, rgb) == 0) {
+            out->rgb = rgb;
+            out->rgb_len = (size_t)cfg->size * (size_t)cfg->size * 3;
+            rgb = NULL;
+            st = PREP_OK;
+        }
+    }
+    free(rgb);
+    rs_free(rs);
+    explicit_bzero(px, px_len);
+    WebPFree(px);
+    return st;
+}
+
 prep_status_t image_prep(img_kind_t kind, const uint8_t *data, size_t len,
                          const prep_cfg_t *cfg, prep_result_t *out)
 {
@@ -344,6 +392,7 @@ prep_status_t image_prep(img_kind_t kind, const uint8_t *data, size_t len,
     switch (kind) {
     case IMG_JPEG: return decode_jpeg(data, len, cfg, out);
     case IMG_PNG:  return decode_png(data, len, cfg, out);
+    case IMG_WEBP: return decode_webp(data, len, cfg, out);
     default:       return PREP_UNSUPPORTED;
     }
 }

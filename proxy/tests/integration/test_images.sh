@@ -105,7 +105,12 @@ curl -s $H "$O/img/pic.png?ct=image/jpeg" | cmp -s - "$T/img/pic.png"; check "PN
 # --- 4. things that are not decodable pass through, and are accounted for ---------
 curl -s $H "$O/img/anim.gif" | cmp -s - "$T/img/anim.gif"; check "GIF delivered unchanged" $?
 curl -s $H "$O/img/pic.webp" | cmp -s - "$T/img/pic.webp"; check "WebP delivered unchanged" $?
-[ "$(count 'kind=other .*error=unsupported_format')" -eq 2 ]; check "GIF and WebP logged as unsupported formats" $?
+[ "$(count 'kind=other .*error=unsupported_format')" -eq 1 ]; check "GIF logged as an unsupported format" $?
+[ "$(count 'kind=webp src=200x200 .*prep=')" -eq 1 ]; check "WebP is decoded like JPEG and PNG" $?
+for mode in cl chunked close; do
+    curl -s $S "$Q/img/pic.webp?mode=$mode" | cmp -s - "$T/img/pic.webp"; check "HTTPS WebP ($mode) delivered unchanged" $?
+done
+[ "$(count 'kind=webp src=200x200 .*prep=')" -eq 4 ]; check "all four WebP responses were decoded" $?
 curl -s $H "$O/img/trunc.jpg" | cmp -s - "$T/img/trunc.jpg"; check "truncated JPEG delivered unchanged" $?
 [ "$(count 'kind=jpeg .*error=corrupt')" -ge 1 ]; check "truncated JPEG logged as corrupt" $?
 curl -s $H "$O/img/fake.jpg" | cmp -s - "$T/img/fake.jpg"; check "image/jpeg that is not an image: delivered" $?
@@ -180,6 +185,26 @@ fe0=$(grep -c 'framing error' "$T/p1.log")
 python3 tests/integration/opaque_client.py 18090 fpgate.test 18444 "$T/ca/ca.crt" >"$T/opq.out" 2>&1
 grep -q '^ok' "$T/opq.out"; check "non-HTTP protocol inside TLS passes through untouched ($(tail -1 "$T/opq.out" | cut -c1-60))" $?
 [ "$(grep -c 'framing error' "$T/p1.log")" -eq "$fe0" ]; check "non-HTTP protocol is not reported as a framing error" $?
+
+
+# --- 12. Accept loses image/avif, nothing else changes ---------------------------------------------
+A='Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+want='Accept: image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+out=$(curl -s $H "$O/echo" -H "$A" -H 'X-Keep: 1')
+echo "$out" | grep -qxF "$want" && echo "$out" | grep -qF 'X-Keep: 1'
+check "plain HTTP: Accept loses image/avif, other headers intact" $?
+out=$(curl -s $S "$Q/echo" -H "$A" -H 'X-Keep: 1')
+echo "$out" | grep -qxF "$want" && echo "$out" | grep -qF 'X-Keep: 1'
+check "intercepted HTTPS: Accept loses image/avif, other headers intact" $?
+out=$(curl -s $S "$Q/echo" -H 'Accept: image/webp,*/*')
+echo "$out" | grep -qxF 'Accept: image/webp,*/*'; check "an Accept without AVIF is forwarded untouched" $?
+out=$(curl -s $S "$Q/echo" -H 'Accept: image/avif')
+echo "$out" | grep -qxF 'Accept: */*'; check "an Accept that only allowed AVIF becomes */*" $?
+[ "$(curl -s $S -d 'payload-xyz' -H "$A" "$Q/post")" = "payload-xyz" ]
+check "a POST whose head was shortened keeps its body intact" $?
+out=$(python3 tests/integration/pipeline_client.py 18090 fpgate.test 18443 "$T/ca/ca.crt" \
+        "/img/pic.webp=$(fsha "$T/img/pic.webp")" "/echo=-" "/img/photo.jpg=$(fsha "$T/img/photo.jpg")" 2>&1)
+[ "$(echo "$out" | grep -c '^ok')" -eq 3 ]; check "pipelined WebP, text and JPEG on one tunnel are all intact" $?
 
 kill -0 $P1 2>/dev/null; check "proxy still alive" $?
 if grep -E "AddressSanitizer|runtime error|LeakSanitizer" "$T"/p*.log; then echo "FAIL sanitizer report"; fail=1; fi

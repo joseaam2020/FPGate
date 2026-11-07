@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake nasm xz-utils python3-pil \
     && rm -rf /var/lib/apt/lists/*
 
-# zlib + libpng + libjpeg-turbo, static, built for /opt/deps/native and
+# zlib + libpng + libjpeg-turbo + libwebp, static, built for /opt/deps/native and
 # /opt/deps/arm (musl, with NEON enabled: the HPS is a Cortex-A9).
 ARG ZLIB_URL=https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
 ARG ZLIB_SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
@@ -52,6 +52,8 @@ ARG LIBPNG_URL=https://download.sourceforge.net/libpng/libpng-1.6.47.tar.xz
 ARG LIBPNG_SHA256=b213cb381fbb1175327bd708a77aab708a05adde7b471bc267bd15ac99893631
 ARG LIBJPEG_URL=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.1/libjpeg-turbo-3.1.1.tar.gz
 ARG LIBJPEG_SHA256=aadc97ea91f6ef078b0ae3a62bba69e008d9a7db19b34e4ac973b19b71b4217c
+ARG LIBWEBP_URL=https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz
+ARG LIBWEBP_SHA256=7d6fab70cf844bf6769077bd5d7a74893f8ffd4dfb42861745750c63c2a5c92c
 COPY build-deps.sh /tmp/build-deps.sh
 RUN sh /tmp/build-deps.sh && rm /tmp/build-deps.sh
 
