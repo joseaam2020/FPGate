@@ -75,4 +75,9 @@ RUN curl -fsSL "$SQLITE_URL" -o /tmp/sqlite.zip \
        done \
     && rm -rf /tmp/sqlite /tmp/sqlite.zip
 
+# Fuzzing (libFuzzer needs clang) and faketime, to make a CA that is already expired.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang libfuzzer-14-dev llvm faketime \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /work/proxy
