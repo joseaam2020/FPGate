@@ -1,0 +1,17 @@
+ Container fpgate-torch-run-9e49d3a1b4c3 Creating 
+ Container fpgate-torch-run-9e49d3a1b4c3 Created 
+  10/100  (18s)
+  20/100  (35s)
+  30/100  (52s)
+  40/100  (69s)
+  50/100  (87s)
+  60/100  (104s)
+  70/100  (122s)
+  80/100  (139s)
+  90/100  (156s)
+  100/100  (173s)
+
+100 imagenes de split/val.csv
+config                     acc   FN   FP  flips  err logit
+float                    88.0%    7    5      0     0.0000
+frozen                   88.0%    7    5      0     0.1909

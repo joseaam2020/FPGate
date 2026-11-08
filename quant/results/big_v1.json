@@ -1,0 +1,68 @@
+{
+ "csv": "split/val.csv",
+ "n_images": 1000,
+ "suite": "big",
+ "calib": "quant/calib/calib_stats.json",
+ "score": "low+medium+high>=0.5",
+ "seconds": 1655.3,
+ "configs": {
+  "best_fc2in16_max": {
+   "quantize": [
+    "patch",
+    "qkv",
+    "proj",
+    "fc1",
+    "fc2",
+    "head"
+   ],
+   "percentile": "99.99",
+   "pct_override": {
+    "swiglu_h": "100.0",
+    "proj_out": "100.0",
+    "fc2_out": "100.0",
+    "mlpn_out": "100.0"
+   },
+   "fc2_in_bits": 16
+  },
+  "best_all_int8": {
+   "quantize": [
+    "patch",
+    "qkv",
+    "proj",
+    "fc1",
+    "fc2",
+    "head"
+   ],
+   "percentile": "99.99",
+   "pct_override": {
+    "swiglu_h": "100.0",
+    "proj_out": "100.0",
+    "fc2_out": "100.0"
+   },
+   "fc2_in_bits": 8
+  }
+ },
+ "summary": {
+  "float": {
+   "acc": 0.955,
+   "fn": 28,
+   "fp": 17,
+   "flips_vs_float": 0,
+   "mean_abs_logit_err": 0.0
+  },
+  "best_fc2in16_max": {
+   "acc": 0.955,
+   "fn": 28,
+   "fp": 17,
+   "flips_vs_float": 2,
+   "mean_abs_logit_err": 0.1013035997748375
+  },
+  "best_all_int8": {
+   "acc": 0.95,
+   "fn": 36,
+   "fp": 14,
+   "flips_vs_float": 17,
+   "mean_abs_logit_err": 0.47519049048423767
+  }
+ }
+}

@@ -1,0 +1,24 @@
+ Container fpgate-torch-run-fc81da851f5d Creating 
+ Container fpgate-torch-run-fc81da851f5d Created 
+  vector 1/20
+  vector 2/20
+  vector 3/20
+  vector 4/20
+  vector 5/20
+  vector 6/20
+  vector 7/20
+  vector 8/20
+  vector 9/20
+  vector 10/20
+  vector 11/20
+  vector 12/20
+  vector 13/20
+  vector 14/20
+  vector 15/20
+  vector 16/20
+  vector 17/20
+  vector 18/20
+  vector 19/20
+  vector 20/20
+tamanos (bytes): {'weights_i8.bin': 55271424, 'epilogue_i32.bin': 795280, 'epilogue_f64.bin': 6176, 'tables.bin': 270910, 'hps_f32.bin': 3430272} total 59774062
+EXPORT_EXIT 0

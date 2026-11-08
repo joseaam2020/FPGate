@@ -1,0 +1,30 @@
+ Container fpgate-torch-run-3cf84004f8d2 Creating 
+ Container fpgate-torch-run-3cf84004f8d2 Created 
+error relativo de pesos: max=0.0185 media=0.0095
+calibrando con 255 imagenes de split/train.csv en cuda
+  10/255  (8s)
+  20/255  (15s)
+  30/255  (22s)
+  40/255  (29s)
+  50/255  (36s)
+  60/255  (43s)
+  70/255  (51s)
+  80/255  (58s)
+  90/255  (66s)
+  100/255  (73s)
+  110/255  (81s)
+  120/255  (88s)
+  130/255  (95s)
+  140/255  (102s)
+  150/255  (109s)
+  160/255  (115s)
+  170/255  (122s)
+  180/255  (129s)
+  190/255  (136s)
+  200/255  (143s)
+  210/255  (150s)
+  220/255  (158s)
+  230/255  (165s)
+  240/255  (172s)
+  250/255  (179s)
+listo: 170 tensores observados -> quant/calib_r4

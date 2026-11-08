@@ -1,0 +1,30 @@
+ Container fpgate-torch-run-be53037afcbd Creating 
+ Container fpgate-torch-run-be53037afcbd Created 
+error relativo de pesos: max=0.0185 media=0.0096
+calibrando con 255 imagenes de split/train.csv en cuda
+  10/255  (8s)
+  20/255  (15s)
+  30/255  (23s)
+  40/255  (30s)
+  50/255  (38s)
+  60/255  (45s)
+  70/255  (52s)
+  80/255  (60s)
+  90/255  (68s)
+  100/255  (75s)
+  110/255  (83s)
+  120/255  (90s)
+  130/255  (98s)
+  140/255  (105s)
+  150/255  (113s)
+  160/255  (120s)
+  170/255  (128s)
+  180/255  (136s)
+  190/255  (143s)
+  200/255  (150s)
+  210/255  (158s)
+  220/255  (166s)
+  230/255  (173s)
+  240/255  (181s)
+  250/255  (188s)
+listo: 170 tensores observados -> quant/calib_r2

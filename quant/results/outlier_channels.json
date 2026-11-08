@@ -1,0 +1,127 @@
+{
+ "tap": "mlpn_out",
+ "percentile": "99.9",
+ "n_images": 20,
+ "per_block": {
+  "b0": {
+   "canales_con_atipicos": 1320,
+   "top5_canales": 0.5162891745567322,
+   "top20_canales": 0.5539860725402832,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.00795237347483635,
+   "share_token_cls": 0.0016036554557237318,
+   "max_sobre_mediana_canal": 31.47626495361328,
+   "jaccard_top10": 0.06727861966577932
+  },
+  "b1": {
+   "canales_con_atipicos": 1393,
+   "top5_canales": 0.17131681740283966,
+   "top20_canales": 0.30401554703712463,
+   "tokens_con_atipicos": 1024,
+   "top5_tokens": 0.00884055346250534,
+   "share_token_cls": 0.0,
+   "max_sobre_mediana_canal": 4.013191223144531,
+   "jaccard_top10": 0.04710725472090953
+  },
+  "b2": {
+   "canales_con_atipicos": 1424,
+   "top5_canales": 0.1120901107788086,
+   "top20_canales": 0.27742719650268555,
+   "tokens_con_atipicos": 1024,
+   "top5_tokens": 0.00788226630538702,
+   "share_token_cls": 0.0,
+   "max_sobre_mediana_canal": 7.361651420593262,
+   "jaccard_top10": 0.10703021744247082
+  },
+  "b3": {
+   "canales_con_atipicos": 1503,
+   "top5_canales": 0.14538723230361938,
+   "top20_canales": 0.26698508858680725,
+   "tokens_con_atipicos": 1024,
+   "top5_tokens": 0.008935305289924145,
+   "share_token_cls": 0.0,
+   "max_sobre_mediana_canal": 9.164488792419434,
+   "jaccard_top10": 0.2003781134586088
+  },
+  "b4": {
+   "canales_con_atipicos": 1591,
+   "top5_canales": 0.16649924218654633,
+   "top20_canales": 0.29231539368629456,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.00931464321911335,
+   "share_token_cls": 0.0013698004657321584,
+   "max_sobre_mediana_canal": 8.55015754699707,
+   "jaccard_top10": 0.16078008588192694
+  },
+  "b5": {
+   "canales_con_atipicos": 1618,
+   "top5_canales": 0.09003429859876633,
+   "top20_canales": 0.20371095836162567,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.010014043189585209,
+   "share_token_cls": 0.0013812472662814521,
+   "max_sobre_mediana_canal": 19.04235076904297,
+   "jaccard_top10": 0.1205723933155902
+  },
+  "b6": {
+   "canales_con_atipicos": 1528,
+   "top5_canales": 0.07404109835624695,
+   "top20_canales": 0.21206118166446686,
+   "tokens_con_atipicos": 1024,
+   "top5_tokens": 0.008882259950041771,
+   "share_token_cls": 0.0,
+   "max_sobre_mediana_canal": 7.2825026512146,
+   "jaccard_top10": 0.055163321099446175
+  },
+  "b7": {
+   "canales_con_atipicos": 1342,
+   "top5_canales": 0.07906696945428848,
+   "top20_canales": 0.24225817620754242,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.008688678033649921,
+   "share_token_cls": 0.001358998351379049,
+   "max_sobre_mediana_canal": 7.926699161529541,
+   "jaccard_top10": 0.06530535575264264
+  },
+  "b8": {
+   "canales_con_atipicos": 1298,
+   "top5_canales": 0.16708949208259583,
+   "top20_canales": 0.3410462737083435,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.008551307953894138,
+   "share_token_cls": 0.0016840171463563993,
+   "max_sobre_mediana_canal": 6.512505054473877,
+   "jaccard_top10": 0.09720793211097907
+  },
+  "b9": {
+   "canales_con_atipicos": 1233,
+   "top5_canales": 0.20154352486133575,
+   "top20_canales": 0.39674511551856995,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.008393760770559311,
+   "share_token_cls": 0.0004663200354403227,
+   "max_sobre_mediana_canal": 9.539570808410645,
+   "jaccard_top10": 0.06610831774999926
+  },
+  "b10": {
+   "canales_con_atipicos": 1456,
+   "top5_canales": 0.15228340029716492,
+   "top20_canales": 0.33548402786254883,
+   "tokens_con_atipicos": 1024,
+   "top5_tokens": 0.009306341409683228,
+   "share_token_cls": 0.0009114458409287153,
+   "max_sobre_mediana_canal": 6.540543556213379,
+   "jaccard_top10": 0.036346025021273466
+  },
+  "b11": {
+   "canales_con_atipicos": 1687,
+   "top5_canales": 0.13874071836471558,
+   "top20_canales": 0.2982584238052368,
+   "tokens_con_atipicos": 1025,
+   "top5_tokens": 0.008549506776034832,
+   "share_token_cls": 0.0015101692851053465,
+   "max_sobre_mediana_canal": 4.030359745025635,
+   "jaccard_top10": 0.051701881121793046
+  }
+ }
+}

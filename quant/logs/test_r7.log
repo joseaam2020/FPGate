@@ -1,0 +1,37 @@
+ Container fpgate-torch-run-45c6d74d4dad Creating 
+ Container fpgate-torch-run-45c6d74d4dad Created 
+  50/504  (61s)
+  100/504  (121s)
+  150/504  (181s)
+  200/504  (240s)
+  250/504  (300s)
+  300/504  (360s)
+  350/504  (420s)
+  400/504  (480s)
+  450/504  (540s)
+  500/504  (600s)
+{
+ "int8": {
+  "acc": 0.9503968253968254,
+  "correct": 479,
+  "fn": 15,
+  "fp": 10,
+  "flips_vs_ref": 25,
+  "fn_by_class": {
+   "hentai": 14,
+   "porn": 1
+  }
+ },
+ "baseline": {
+  "acc": 0.9523809523809523,
+  "fn": 9,
+  "fp": 15
+ },
+ "criterion": {
+  "acc_ok": true,
+  "fn_ok": false,
+  "fp_ok": true,
+  "flips_ok": false
+ },
+ "accepted": false
+}
