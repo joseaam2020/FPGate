@@ -19,7 +19,7 @@ static inspect_cfg_t g_cfg = {
     .enabled = 1,
     .max_bytes = 8u * 1024 * 1024,
     .budget_bytes = 64u * 1024 * 1024,
-    .prep = { .size = 448, .center_crop = 1, .dct_scaling = 0, .max_pixels = 16000000ul },
+    .prep = { .size = 448, .center_crop = 0, .dct_scaling = 0, .max_pixels = 16000000ul },
     .workers = 1,
     .threshold = 0.50f,
     .on_failure = POLICY_BLOCK,         /* RF-14: when in doubt, block */

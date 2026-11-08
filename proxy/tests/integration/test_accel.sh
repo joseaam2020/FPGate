@@ -47,6 +47,13 @@ data = open(d + "/white.jpg", "rb").read()
 open(d + "/trunc.jpg", "wb").write(data[: len(data) // 2])
 open(d + "/page.txt", "wb").write(b"hello " * 50)
 Image.new("RGB", (64, 64), (200, 30, 30)).save(d + "/custom.png")
+# Not square, not uniform: squashing and centre-cropping it give different tensors.
+half = Image.new("RGB", (640, 480))
+px = half.load()
+for x in range(640):
+    for y in range(480):
+        px[x, y] = (x * 255 // 639, y * 255 // 479, 255 if x < 160 else 0)
+half.save(d + "/half.png")
 EOF
 export IMG_DIR="$T/img"
 
@@ -84,7 +91,8 @@ $BIN -p 18092 $CA --accel $T/m2.sock --queue-max 2 --accel-timeout-ms 8000 2>$T/
 $BIN -p 18093 $CA --accel $T/m1.sock --threshold 0.6 --on-failure allow 2>$T/p4.log & P4=$!
 $BIN -p 18094 $CA --accel $T/m1.sock --on-unexamined block --substitute $T/img/custom.png 2>$T/p5.log & P5=$!
 $BIN -p 18095 $CA --accel $T/m1.sock --on-corrupt allow 2>$T/p6.log & P6=$!
-PIDS="$PIDS $P1 $P2 $P3 $P4 $P5 $P6"
+$BIN -p 18096 $CA --accel $T/m1.sock --crop 2>$T/p7.log & P7=$!
+PIDS="$PIDS $P1 $P2 $P3 $P4 $P5 $P6 $P7"
 sleep 2.5
 O=http://127.0.0.1:18081
 Q=https://fpgate.test:18443
@@ -130,9 +138,20 @@ curl -s $(hp 18093) "$O/img/white.png" -o "$T/g2.out"; ! cmp -s "$T/g2.out" "$T/
 check "--threshold 0.6: a 1.0 image is still replaced" $?
 
 # --- 3. what reaches the accelerator is exactly the preprocessed tensor --------------------------
-"$PREP" "$T/img/black.png" 448 crop 0 "$T/black.rgb" >/dev/null
+"$PREP" "$T/img/black.png" 448 squash 0 "$T/black.rgb" >/dev/null
 grep -q "$(fsha "$T/black.rgb")" "$T/m1.mock"; check "the accelerator received byte-for-byte the tensor prep_tool makes (RF-03)" $?
 grep -q '"w": 448, "h": 448, "bytes": 602112' "$T/m1.mock"; check "request carried 448x448x3 = 602112 bytes of RGB" $?
+
+# The model was evaluated with Resize((448, 448)) squash, whole image (E1); a centre crop would hide the
+# borders of the picture from the classifier. Squash is the default, --crop the exception.
+"$PREP" "$T/img/half.png" 448 squash 0 "$T/half_squash.rgb" >/dev/null
+"$PREP" "$T/img/half.png" 448 crop 0 "$T/half_crop.rgb" >/dev/null
+[ "$(fsha "$T/half_squash.rgb")" != "$(fsha "$T/half_crop.rgb")" ]; check "the test image gives different tensors when squashed and when centre-cropped" $?
+curl -s $(hp 18090) "$O/img/half.png" -o /dev/null
+grep -q "$(fsha "$T/half_squash.rgb")" "$T/m1.mock"; check "default: the accelerator receives the whole image squashed to 448x448" $?
+! grep -q "$(fsha "$T/half_crop.rgb")" "$T/m1.mock"; check "default: nothing is cropped away" $?
+curl -s $(hp 18096) "$O/img/half.png" -o /dev/null
+grep -q "$(fsha "$T/half_crop.rgb")" "$T/m1.mock"; check "--crop: the shorter side is resized and the centre cropped" $?
 
 # --- 4. the rest of the traffic is untouched ---------------------------------------------------------------
 curl -s $(hp 18090) "$O/img/page.txt" | cmp -s - "$T/img/page.txt"; check "text passes without being judged" $?

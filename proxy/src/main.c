@@ -78,12 +78,13 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-p port] [-C ca.crt -K ca.key [-P passfile] [-B bundle.pem]]\n"
-            "          [-S size] [-Q] [-D] [-L max_bytes] [-W workers] [-V] [-N] [-v]\n"
+            "          [-S size] [--crop] [-D] [-L max_bytes] [-W workers] [-V] [-N] [-v]\n"
             "  -C/-K  CA certificate and (encrypted) private key; enables HTTPS interception\n"
             "  -P     file holding the CA key password (default: $FPGATE_CA_PASS)\n"
             "  -B     trusted CA bundle used to verify the real servers\n"
             "  -S     side of the square image sent to the accelerator (default 448)\n"
-            "  -Q     squash to size x size instead of resize shorter side + centre crop\n"
+            "  --crop resize the shorter side and centre-crop instead of squashing to size x size\n"
+            "         (the default is squash: it is what the model expects and it keeps the whole image)\n"
             "  -D     let the JPEG decoder scale by 1/2, 1/4, 1/8 (faster, not bit-exact with PIL)\n"
             "  -L     largest image analysed, in bytes (default 8388608)\n"
             "  -W     image decode worker threads (default 1, 0 = decode inside the event loop)\n"
@@ -150,8 +151,10 @@ int main(int argc, char **argv)
             bundle = argv[++i];
         } else if (strcmp(argv[i], "-S") == 0 && i + 1 < argc) {
             icfg.prep.size = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--crop") == 0) {
+            icfg.prep.center_crop = 1;
         } else if (strcmp(argv[i], "-Q") == 0) {
-            icfg.prep.center_crop = 0;
+            icfg.prep.center_crop = 0;     /* squash, now the default; kept so old command lines work */
         } else if (strcmp(argv[i], "-D") == 0) {
             icfg.prep.dct_scaling = 1;
         } else if (strcmp(argv[i], "-L") == 0 && i + 1 < argc) {
