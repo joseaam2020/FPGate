@@ -5,7 +5,10 @@ Like the real accelerator it processes one image at a time (requests are
 serialised), so the proxy's queue and timeouts behave realistically.
 
 usage: mock_accel.py --socket PATH [--config FILE.json] [--log FILE.jsonl]
-                     [--score S] [--latency SECONDS]
+                     [--score S] [--latency SECONDS] [--size N]
+
+Like the real accelerator it accepts square images of one size only (--size, default 448,
+the resolution the model was frozen at); --size 0 accepts any size. Others get UNSUPPORTED.
 
 The JSON config is re-read on every request, so a test can change behaviour
 while the proxy is running (e.g. start failing, then recover):
@@ -99,7 +102,8 @@ def serve(conn, st):
                 reply(conn, typ, state, rid)
                 continue
             if (typ != T_CLASSIFY or fmt != 0 or ch != 3 or w == 0 or h == 0
-                    or plen != w * h * ch):
+                    or plen != w * h * ch
+                    or (st.args.size and (w != st.args.size or h != st.args.size))):
                 reply(conn, typ, UNSUPPORTED, rid)
                 continue
 
@@ -131,6 +135,8 @@ def main():
     ap.add_argument("--log")
     ap.add_argument("--score", type=float, default=0.0)
     ap.add_argument("--latency", type=float, default=0.0)
+    ap.add_argument("--size", type=int, default=448,
+                    help="side of the square images accepted; 0 = any (default 448)")
     args = ap.parse_args()
 
     if os.path.exists(args.socket):
