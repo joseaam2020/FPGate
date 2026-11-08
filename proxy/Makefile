@@ -89,6 +89,7 @@ test: asan build/proto_dump build/prep_tool build/test_accept build/mock_accel
 	bash tests/integration/test_accel.sh build/asan/fpgate-proxy build/prep_tool build/mock_accel
 	bash tests/integration/test_blocklog.sh build/asan/fpgate-proxy build/mock_accel
 	bash tests/integration/test_admin.sh build/asan/fpgate-proxy build/mock_accel
+	bash tests/integration/test_ca_expiry.sh build/asan/fpgate-proxy
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 
 clean:

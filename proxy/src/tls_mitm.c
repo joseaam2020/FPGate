@@ -312,11 +312,21 @@ int tls_init(const char *ca_cert, const char *ca_key, const char *ca_pass,
 
 int tls_ca_recheck(void)
 {
+    static int checked;
     int ok = g_ready && ca_is_valid_now();
-    if (ok != g_enabled)
-        fprintf(stderr, ok ? "tls: CA valid, HTTPS interception enabled\n"
-                           : "tls: CA expired or not yet valid, HTTPS interception disabled "
-                             "(falling back to blind tunnels)\n");
+    /* The first check always speaks: an expired CA at start-up is a change from nothing. */
+    if (ok != g_enabled || !checked) {
+        char until[16] = "";
+        if (g_ready)
+            snprintf(until, sizeof until, "%04d-%02d-%02d", g_ca_crt.valid_to.year,
+                     g_ca_crt.valid_to.mon, g_ca_crt.valid_to.day);
+        if (ok)
+            fprintf(stderr, "tls: CA valid, HTTPS interception enabled (the CA expires on %s)\n", until);
+        else
+            fprintf(stderr, "tls: CA expired or not yet valid (valid until %s), HTTPS interception "
+                            "disabled: falling back to blind tunnels; renew the CA\n", until);
+    }
+    checked = 1;
     g_enabled = ok;
     return ok;
 }

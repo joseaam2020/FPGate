@@ -1124,7 +1124,7 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
         time_t now = time(NULL);
         if (now != last_sweep) {
             last_sweep = now;
-            if (now % 60 == 0)
+            if (now % 10 == 0)
                 tls_ca_recheck();
             for (conn_t *c = g_all; c; c = c->next)
                 if (now - c->last > IDLE_SECS && !c->dead && !c->hold && !(c->peer && c->peer->hold))
