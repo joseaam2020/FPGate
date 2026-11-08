@@ -164,3 +164,32 @@ Revisar en este orden:
 | Todas las imágenes salen bloqueadas | No hay acelerador escuchando en `--accel` (`reason=accel_down` en el log): arrancar `mock_accel`. |
 
 El log del proxy muestra cada conexión (`CONNECT fpgate.admin:443`) y cada decisión sobre imágenes (`VERDICT ... threshold=...`); es lo primero que hay que mirar.
+
+## 8. Mantenimiento
+
+### Vigencia de la CA (RS-07)
+
+`tools/gen_ca.sh` crea la CA con 365 días de vigencia (el segundo argumento cambia los días). El log de arranque dice hasta cuándo vale:
+
+```
+tls: CA valid, HTTPS interception enabled (the CA expires on 2027-11-08)
+```
+
+El proxy revisa la vigencia cada 10 segundos. Cuando la CA vence (o si ya estaba vencida al arrancar):
+
+- Deja de interceptar HTTPS: las conexiones pasan como túnel ciego, el navegador ve el certificado real del servidor y esas imágenes **no se revisan**. El log lo dice: `tls: CA expired or not yet valid ... renew the CA`.
+- El panel HTTPS (`https://fpgate.admin` y `:8443`) deja de responder, porque su certificado también lo firma la CA.
+- El HTTP en claro sigue inspeccionándose, y `http://fpgate.setup` sigue entregando el certificado.
+
+Para renovarla: generar una CA nueva (sección 2), copiar `ca.crt` y `ca.key` a `/etc/fpgate/`, reiniciar el proxy e instalar el `ca.crt` nuevo en cada dispositivo de prueba (se descarga de `http://fpgate.setup`).
+
+### Pruebas
+
+```sh
+docker compose run --rm dev make test                      # batería completa (unitarias e integración, con ASan)
+docker compose run --rm dev make fuzz-run SECS=300         # fuzzing: 300 s por cada uno de los 6 blancos
+```
+
+El fuzzing (libFuzzer con ASan y UBSan) cubre el framing HTTP, el detector de imágenes, los decodificadores JPEG/PNG/WebP, el archivo TOML, el archivo de credenciales y el parser de solicitudes del panel. Si encuentra algo, deja la entrada que lo provoca en `build/fuzz/crashes/<blanco>/`. Los blancos están en `tests/fuzz/`.
+
+En WSL2/Docker Desktop el ASan de clang 14 se cae al arrancar en algunas ejecuciones; `tests/fuzz/run.sh` lo detecta y repite esa ejecución.
