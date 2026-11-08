@@ -79,7 +79,7 @@ build/prep_tool: tests/unit/prep_tool.c $(PREP_SRC) $(wildcard src/*.h)
 	$(CC) $(CSTD) $(WARN) -O1 -g -fsanitize=address,undefined -Isrc -I$(DEPS)/include \
 	    tests/unit/prep_tool.c $(PREP_SRC) -L$(DEPS)/lib -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread -o $@
 
-test: asan build/proto_dump build/prep_tool build/test_accept build/mock_accel
+test: asan native build/proto_dump build/prep_tool build/test_accept build/mock_accel
 	python3 tests/mock_accel/test_mock_accel.py build/proto_dump
 	build/test_accept
 	python3 tests/unit/test_prep.py build/prep_tool
@@ -90,6 +90,7 @@ test: asan build/proto_dump build/prep_tool build/test_accept build/mock_accel
 	bash tests/integration/test_blocklog.sh build/asan/fpgate-proxy build/mock_accel
 	bash tests/integration/test_admin.sh build/asan/fpgate-proxy build/mock_accel
 	bash tests/integration/test_ca_expiry.sh build/asan/fpgate-proxy
+	bash tests/integration/test_no_persist.sh build/native/fpgate-proxy build/mock_accel
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 
 clean:
