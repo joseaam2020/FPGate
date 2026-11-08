@@ -109,3 +109,48 @@ build/mock_accel: tests/mock_accel/mock_accel.c src/accel_proto.h
 build/arm/mock_accel: tests/mock_accel/mock_accel.c src/accel_proto.h
 	@mkdir -p $(@D)
 	arm-linux-musleabihf-gcc $(CSTD) $(WARN) -O2 -static -Isrc $< -o $@
+
+# ---- fuzzing (libFuzzer, needs clang) ------------------------------------------------------
+# make fuzz               builds every target into build/fuzz/
+# make fuzz-run SECS=300  builds them and runs each for SECS seconds from generated seeds
+
+FUZZCC    := clang
+FUZZ_TARGETS := http_stream detect image toml creds admin
+FUZZ_FLAGS = -std=gnu11 -O1 -g -fno-omit-frame-pointer -ffp-contract=off \
+    -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
+    -Isrc -I$(PHR) -I$(MBED_NATIVE)/include -I$(DEPS_NATIVE)/include -I$(SQL_NATIVE)/include
+FUZZ_LIBS_IMG = -L$(DEPS_NATIVE)/lib -lpng -ljpeg -lwebpdecoder -lz -lm
+ALL_BUT_MAIN  = $(filter-out src/main.c src/admin.c,$(wildcard src/*.c)) $(PHR)/picohttpparser.c build/gen/web_assets.c
+
+.PHONY: fuzz fuzz-run
+fuzz: $(addprefix build/fuzz/,$(FUZZ_TARGETS))
+
+build/fuzz/http_stream: tests/fuzz/fuzz_http_stream.c src/http_stream.c src/http_stream.h $(PHR)/picohttpparser.c
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_http_stream.c src/http_stream.c $(PHR)/picohttpparser.c -o $@
+
+build/fuzz/detect: tests/fuzz/fuzz_detect.c src/image_detect.c src/image_detect.h
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_detect.c src/image_detect.c -o $@
+
+build/fuzz/image: tests/fuzz/fuzz_image.c src/image_prep.c src/image_detect.c src/resample.c $(wildcard src/*.h)
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_image.c src/image_prep.c src/image_detect.c src/resample.c $(FUZZ_LIBS_IMG) -o $@
+
+build/fuzz/toml: tests/fuzz/fuzz_toml.c src/settings.c src/settings.h
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_toml.c src/settings.c -lm -o $@
+
+build/fuzz/creds: tests/fuzz/fuzz_creds.c src/auth.c src/auth.h
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_creds.c src/auth.c -L$(MBED_NATIVE)/lib -lmbedcrypto -o $@
+
+# The admin target compiles src/admin.c as part of the harness (it reaches static functions).
+build/fuzz/admin: tests/fuzz/fuzz_admin.c src/admin.c $(wildcard src/*.h) $(ALL_BUT_MAIN)
+	@mkdir -p $(@D)
+	$(FUZZCC) $(FUZZ_FLAGS) tests/fuzz/fuzz_admin.c $(ALL_BUT_MAIN) \
+	    -L$(MBED_NATIVE)/lib -L$(DEPS_NATIVE)/lib -L$(SQL_NATIVE)/lib \
+	    -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lwebpdecoder -lsqlite3 -lz -lm -lpthread -o $@
+
+fuzz-run: fuzz
+	bash tests/fuzz/run.sh $(or $(SECS),60)
