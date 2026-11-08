@@ -57,4 +57,22 @@ ARG LIBWEBP_SHA256=7d6fab70cf844bf6769077bd5d7a74893f8ffd4dfb42861745750c63c2a5c
 COPY build-deps.sh /tmp/build-deps.sh
 RUN sh /tmp/build-deps.sh && rm /tmp/build-deps.sh
 
+# SQLite amalgamation (block log), static, for /opt/sqlite/native and /opt/sqlite/arm.
+ARG SQLITE_URL=https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip
+ARG SQLITE_SHA256=1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032
+RUN curl -fsSL "$SQLITE_URL" -o /tmp/sqlite.zip \
+    && echo "${SQLITE_SHA256}  /tmp/sqlite.zip" | sha256sum -c - \
+    && python3 -c "import zipfile; zipfile.ZipFile('/tmp/sqlite.zip').extractall('/tmp/sqlite')" \
+    && cd /tmp/sqlite/sqlite-amalgamation-* \
+    && for t in native arm; do \
+         if [ "$t" = arm ]; then CCX=arm-linux-musleabihf-gcc; ARX=arm-linux-musleabihf-ar; \
+         else CCX=gcc; ARX=ar; fi; \
+         mkdir -p /opt/sqlite/$t/lib /opt/sqlite/$t/include \
+         && $CCX -O2 -fPIC -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 -c sqlite3.c -o sqlite3-$t.o \
+         && $ARX rcs /opt/sqlite/$t/lib/libsqlite3.a sqlite3-$t.o \
+         && cp sqlite3.h /opt/sqlite/$t/include/ \
+         || exit 1; \
+       done \
+    && rm -rf /tmp/sqlite /tmp/sqlite.zip
+
 WORKDIR /work/proxy
