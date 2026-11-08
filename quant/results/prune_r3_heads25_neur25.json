@@ -1,0 +1,93 @@
+{
+ "args": {
+  "start": "quant/ckpt/r2_heads25.pt",
+  "heads_frac": 0.25,
+  "neurons_frac": 0.25,
+  "protect_neurons": [
+   1
+  ],
+  "train_images": 3000,
+  "eval_images": 500,
+  "calib_images": 32,
+  "lr": 2e-05,
+  "accum": 8,
+  "seed": 2,
+  "tag": "r3_heads25_neur25",
+  "outdir": "quant/results",
+  "ckptdir": "quant/ckpt"
+ },
+ "eval_set": "split/val.csv[:500]",
+ "teacher": {
+  "acc": 0.95,
+  "fn": 17,
+  "fp": 8
+ },
+ "ops_fraction": 0.7613616190307119,
+ "dims": [
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   2048
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ],
+  [
+   9,
+   1536
+  ]
+ ],
+ "before_training": {
+  "acc": 0.904,
+  "fn": 41,
+  "fp": 7,
+  "flips_vs_teacher": 27,
+  "logit_err": 1.239670753479004
+ },
+ "after_training": {
+  "acc": 0.948,
+  "fn": 12,
+  "fp": 14,
+  "flips_vs_teacher": 19,
+  "logit_err": 0.689758837223053
+ },
+ "loss_first100": 0.3022078291978687,
+ "loss_last100": 0.19290098188910634,
+ "seconds": 2761.7
+}

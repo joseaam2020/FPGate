@@ -1,0 +1,7 @@
+acc,cambios,cumple,fn,fn_cls,fp,fp_cls,lat_ms,modelo,n,ops,origen,peso_mb
+0.9682999999999999,—,—,12,—,4,—,2955.89,clip_laion_probed,504,—,benchmark,1710.52
+0.9226000000000001,—,—,31,—,8,—,164.32,cnn_gantman_mobilenetv2,504,—,benchmark,
+0.9523999999999999,—,—,9,—,15,—,673.51,vit_freepik_eva02,504,—,benchmark,172.73
+0.8553000000000001,—,—,21,—,2,—,36716.2,vlm_llavaguard,159,—,benchmark,1787.45
+0.9523809523809523,2,sí,10,"hentai 8, porn 1, sexy 1",14,"neutral 9, drawings 5",,ViT INT8 sin podar,504,1.0,quant/eval_test.py,
+0.9503968253968254,25,no (excepción §8),15,"hentai 14, porn 1",10,"neutral 7, drawings 3",,ViT r7 INT8 podado,504,0.6492691875258891,quant/eval_test.py,57.004987716674805

@@ -1,0 +1,52 @@
+{
+ "csv": "split/test.csv",
+ "ref": "torch_results.csv",
+ "ref_model": "vit_freepik_eva02",
+ "n_images": 504,
+ "calib_sha256": "a2442a9f1db2113201536d089c5f8358a88ca1d5ad6b3cad6d22ff17d3c59886",
+ "config": {
+  "percentile": "99.99",
+  "pct_override": {
+   "swiglu_h": "100.0",
+   "proj_out": "100.0",
+   "fc2_out": "100.0",
+   "mlpn_out": "100.0"
+  },
+  "fc2_in_bits": 16,
+  "int_scores": true,
+  "int_softmax": true,
+  "int_av": true,
+  "int_silu": true,
+  "int_io": true,
+  "softmax_bits": 16,
+  "exp_entries": 1024,
+  "exp_tmax": 16.0,
+  "silu_in_bits": 8,
+  "sg_bits": 16
+ },
+ "seconds": 959.1,
+ "int8": {
+  "acc": 0.9523809523809523,
+  "correct": 480,
+  "fn": 10,
+  "fp": 14,
+  "flips_vs_ref": 2,
+  "fn_by_class": {
+   "hentai": 8,
+   "porn": 1,
+   "sexy": 1
+  }
+ },
+ "baseline": {
+  "acc": 0.9523809523809523,
+  "fn": 9,
+  "fp": 15
+ },
+ "criterion": {
+  "acc_ok": true,
+  "fn_ok": true,
+  "fp_ok": true,
+  "flips_ok": true
+ },
+ "accepted": true
+}

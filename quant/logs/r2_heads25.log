@@ -1,0 +1,39 @@
+ Container fpgate-torch-run-2c996cc89b8c Creating 
+ Container fpgate-torch-run-2c996cc89b8c Created 
+maestro (modelo original) en 500 imagenes de val: {'acc': 0.95, 'fn': 17, 'fp': 8}
+dimensiones (cabezas, neuronas) por bloque: [(9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048), (9, 2048)]
+operaciones restantes: 88.6 % del original
+tras podar, sin reentrenar: {'acc': 0.942, 'fn': 18, 'fp': 11, 'flips_vs_teacher': 8, 'logit_err': 0.5908147096633911}
+  entrenamiento 100/3000  perdida media(ult.100) 0.1899  (88s)
+  entrenamiento 200/3000  perdida media(ult.100) 0.3712  (176s)
+  entrenamiento 300/3000  perdida media(ult.100) 0.2267  (263s)
+  entrenamiento 400/3000  perdida media(ult.100) 0.1525  (350s)
+  entrenamiento 500/3000  perdida media(ult.100) 0.1478  (438s)
+  entrenamiento 600/3000  perdida media(ult.100) 0.2362  (525s)
+  entrenamiento 700/3000  perdida media(ult.100) 0.3725  (613s)
+  entrenamiento 800/3000  perdida media(ult.100) 0.2502  (701s)
+  entrenamiento 900/3000  perdida media(ult.100) 0.2888  (788s)
+  entrenamiento 1000/3000  perdida media(ult.100) 0.2024  (876s)
+  entrenamiento 1100/3000  perdida media(ult.100) 0.1690  (964s)
+  entrenamiento 1200/3000  perdida media(ult.100) 0.1155  (1051s)
+  entrenamiento 1300/3000  perdida media(ult.100) 0.2139  (1139s)
+  entrenamiento 1400/3000  perdida media(ult.100) 0.1393  (1227s)
+  entrenamiento 1500/3000  perdida media(ult.100) 0.2058  (1314s)
+  entrenamiento 1600/3000  perdida media(ult.100) 0.2028  (1402s)
+  entrenamiento 1700/3000  perdida media(ult.100) 0.2146  (1490s)
+  entrenamiento 1800/3000  perdida media(ult.100) 0.2253  (1578s)
+  entrenamiento 1900/3000  perdida media(ult.100) 0.2772  (1666s)
+  entrenamiento 2000/3000  perdida media(ult.100) 0.1158  (1753s)
+  entrenamiento 2100/3000  perdida media(ult.100) 0.2028  (1840s)
+  entrenamiento 2200/3000  perdida media(ult.100) 0.0922  (1928s)
+  entrenamiento 2300/3000  perdida media(ult.100) 0.1436  (2016s)
+  entrenamiento 2400/3000  perdida media(ult.100) 0.1683  (2103s)
+  entrenamiento 2500/3000  perdida media(ult.100) 0.1130  (2191s)
+  entrenamiento 2600/3000  perdida media(ult.100) 0.1691  (2278s)
+  entrenamiento 2700/3000  perdida media(ult.100) 0.1058  (2365s)
+  entrenamiento 2800/3000  perdida media(ult.100) 0.1012  (2453s)
+  entrenamiento 2900/3000  perdida media(ult.100) 0.1139  (2541s)
+  entrenamiento 3000/3000  perdida media(ult.100) 0.1456  (2628s)
+tras reentrenar: {'acc': 0.942, 'fn': 18, 'fp': 11, 'flips_vs_teacher': 8, 'logit_err': 0.5531179904937744}
+
+listo: quant/ckpt/r2_heads25.pt
