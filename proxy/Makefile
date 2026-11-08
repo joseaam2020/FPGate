@@ -2,7 +2,7 @@
 # Run inside the dev container: docker compose run --rm dev make <target>
 
 PHR := third_party/picohttpparser
-SRC := $(wildcard src/*.c) $(PHR)/picohttpparser.c
+SRC := $(wildcard src/*.c) $(PHR)/picohttpparser.c build/gen/web_assets.c
 HDR := $(wildcard src/*.h) $(PHR)/picohttpparser.h Makefile
 
 # Third-party static libraries, built into the dev image (docker/Dockerfile).
@@ -10,13 +10,15 @@ MBED_NATIVE := /opt/mbedtls/native
 MBED_ARM    := /opt/mbedtls/arm
 DEPS_NATIVE := /opt/deps/native
 DEPS_ARM    := /opt/deps/arm
+SQL_NATIVE  := /opt/sqlite/native
+SQL_ARM     := /opt/sqlite/arm
 
 BUILD_EPOCH := $(shell date +%s)
 WARN     := -Wall -Wextra -Werror
 HARDEN   := -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
 CSTD     := -std=gnu11 -ffp-contract=off   # coefficients must not depend on FMA availability
-COMMON    = $(CSTD) $(WARN) -Isrc -I$(PHR) -I$(MBED)/include -I$(DEPS)/include -DBUILD_EPOCH=$(BUILD_EPOCH)
-LINK      = -L$(MBED)/lib -L$(DEPS)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lwebpdecoder -lz -lm -lpthread
+COMMON    = $(CSTD) $(WARN) -Isrc -I$(PHR) -I$(MBED)/include -I$(DEPS)/include -I$(SQL)/include -DBUILD_EPOCH=$(BUILD_EPOCH)
+LINK      = -L$(MBED)/lib -L$(DEPS)/lib -L$(SQL)/lib -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lwebpdecoder -lsqlite3 -lz -lm -lpthread
 
 .PHONY: native arm asan ubsan test clean
 
@@ -29,10 +31,19 @@ build/native/fpgate-proxy: MBED := $(MBED_NATIVE)
 build/asan/fpgate-proxy:   MBED := $(MBED_NATIVE)
 build/ubsan/fpgate-proxy:  MBED := $(MBED_NATIVE)
 build/arm/fpgate-proxy:    MBED := $(MBED_ARM)
+build/native/fpgate-proxy: SQL := $(SQL_NATIVE)
+build/asan/fpgate-proxy:   SQL := $(SQL_NATIVE)
+build/ubsan/fpgate-proxy:  SQL := $(SQL_NATIVE)
+build/arm/fpgate-proxy:    SQL := $(SQL_ARM)
 build/native/fpgate-proxy: DEPS := $(DEPS_NATIVE)
 build/asan/fpgate-proxy:   DEPS := $(DEPS_NATIVE)
 build/ubsan/fpgate-proxy:  DEPS := $(DEPS_NATIVE)
 build/arm/fpgate-proxy:    DEPS := $(DEPS_ARM)
+
+# The admin pages are compiled into the binary.
+build/gen/web_assets.c: web/login.html web/dashboard.html web/certificate.html tools/embed_web.py
+	@mkdir -p $(@D)
+	python3 tools/embed_web.py web $@
 
 build/native/fpgate-proxy: $(SRC) $(HDR)
 	@mkdir -p $(@D)
@@ -76,6 +87,8 @@ test: asan build/proto_dump build/prep_tool build/test_accept build/mock_accel
 	bash tests/integration/test_images.sh build/asan/fpgate-proxy
 	bash tests/integration/test_workers.sh build/asan/fpgate-proxy
 	bash tests/integration/test_accel.sh build/asan/fpgate-proxy build/prep_tool build/mock_accel
+	bash tests/integration/test_blocklog.sh build/asan/fpgate-proxy build/mock_accel
+	bash tests/integration/test_admin.sh build/asan/fpgate-proxy build/mock_accel
 	bash tests/integration/test_tls.sh build/asan/fpgate-proxy
 
 clean:

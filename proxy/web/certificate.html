@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPGate — Instalar certificado</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #FAFAF9; }
+  button { font-family: inherit; cursor: pointer; }
+  .btn-primary:hover { background: #27272A !important; }
+  a { color: #52525B; text-decoration: none; }
+  a:hover { color: #18181B; }
+  .wrap { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 32px 64px; display: flex; flex-direction: column; }
+  code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; background: #F4F4F5; padding: 2px 6px; border-radius: 4px; color: #27272A; word-break: break-all; }
+  .step { display: flex; gap: 16px; padding: 16px 0; border-bottom: 1px solid #F4F4F5; }
+  .step:last-child { border-bottom: none; }
+  .num { width: 26px; height: 26px; border-radius: 50%; background: #18181B; color: #FAFAF9; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-title { font-size: 14px; font-weight: 500; color: #18181B; }
+  .step-text { font-size: 13px; color: #71717A; margin-top: 4px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div style="display: flex; align-items: center; gap: 8px; padding: 24px 0; margin-bottom: 8px; min-height: 70px">
+    <a id="backLink" href="/dashboard" style="display: none; align-items: center; gap: 6px; font-size: 13px; color: #52525B">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      Volver al dashboard
+    </a>
+  </div>
+
+  <div style="margin-bottom: 8px">
+    <div style="font-size: 22px; font-weight: 600; color: #18181B">Instalar el certificado del proxy</div>
+    <div style="font-size: 14px; color: #71717A; margin-top: 6px; line-height: 1.5">Este certificado permite que FPGate revise las imágenes de las páginas seguras (HTTPS) del dispositivo de prueba. Solo necesitas hacerlo una vez.</div>
+  </div>
+
+  <div style="display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-radius: 10px; background: #FFFBEB; border: 1px solid #FDE68A; margin: 20px 0 28px">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#92400E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+    <span style="font-size: 13px; color: #92400E; line-height: 1.5">Instala este certificado únicamente en el dispositivo de prueba destinado para este proyecto. No lo compartas ni lo instales en dispositivos personales.</span>
+  </div>
+
+  <div style="padding: 20px 24px; border-radius: 12px; border: 1px solid #E4E4E7; background: #FFFFFF; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap">
+    <div style="display: flex; align-items: center; gap: 12px; min-width: 0">
+      <div style="width: 40px; height: 40px; border-radius: 8px; background: #F4F4F5; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3F3F46" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+      </div>
+      <div style="min-width: 0">
+        <div style="font-size: 14px; font-weight: 500; color: #18181B">fpgate-ca.crt</div>
+        <div style="font-size: 12px; color: #A1A1AA">Autoridad certificadora (CA) pública de FPGate</div>
+      </div>
+    </div>
+    <a class="btn-primary" id="downloadBtn" href="/ca.crt" download="fpgate-ca.crt" style="flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 8px; border: none; background: #18181B; color: #FAFAF9; font-size: 13px; font-weight: 500">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FAFAF9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      Descargar certificado
+    </a>
+  </div>
+
+  <div id="downloadedMsg" style="display: none; align-items: center; gap: 8px; font-size: 13px; color: #15803D; margin: 0 0 28px">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#15803D" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    Certificado descargado. Sigue los pasos a continuación para instalarlo.
+  </div>
+
+  <div style="font-size: 15px; font-weight: 600; color: #18181B; margin-bottom: 8px">Pasos de instalación (Windows y Chrome)</div>
+
+  <div>
+    <div class="step">
+      <div class="num">1</div>
+      <div>
+        <div class="step-title">Descarga el certificado</div>
+        <div class="step-text">Usa el botón de arriba para guardar el archivo <code>fpgate-ca.crt</code> en el dispositivo de prueba.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">2</div>
+      <div>
+        <div class="step-title">Abre el archivo descargado</div>
+        <div class="step-text">Busca <code>fpgate-ca.crt</code> en la carpeta de descargas y haz doble clic. Se abrirá una ventana con los datos del certificado; pulsa <b>Instalar certificado…</b></div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">3</div>
+      <div>
+        <div class="step-title">Instálalo como certificado de confianza</div>
+        <div class="step-text">Elige <b>Usuario actual</b> y pulsa Siguiente. Luego selecciona <b>Colocar todos los certificados en el siguiente almacén</b>, pulsa Examinar y elige <b>Entidades de certificación raíz de confianza</b>. Pulsa Siguiente y Finalizar.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">4</div>
+      <div>
+        <div class="step-title">Confirma la advertencia de seguridad</div>
+        <div class="step-text">Windows avisará que vas a instalar un certificado de una autoridad desconocida. Es lo esperado: FPGate es la autoridad de este proyecto. Pulsa <b>Sí</b>.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">5</div>
+      <div>
+        <div class="step-title">Abre Chrome conectado a FPGate</div>
+        <div class="step-text">Cierra todas las ventanas de Chrome. Pulsa las teclas Windows + R, escribe el siguiente comando y pulsa Enter:<br>
+          <code id="chromeCmd">chrome.exe --proxy-server="{{PROXY_ADDR}}"</code><br>
+          Solo esa ventana de Chrome pasa por FPGate; el resto del equipo no se ve afectado.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">6</div>
+      <div>
+        <div class="step-title">Comprueba que funciona</div>
+        <div class="step-text">En esa ventana de Chrome abre una página segura, por ejemplo <code>https://www.wikipedia.org</code>. Debe cargar con el candado, sin avisos de privacidad. Si Chrome muestra «Tu conexión no es privada», revisa que el certificado quedó en <i>Entidades de certificación raíz de confianza</i> y vuelve a abrir Chrome con el comando del paso 5.<br><br>
+          Si el equipo tiene un antivirus o un control parental que revisa el tráfico HTTPS, puede mostrar su propio error de certificado; en ese caso desactiva esa revisión para el dispositivo de prueba.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  document.getElementById('downloadBtn').addEventListener('click', function () {
+    document.getElementById('downloadedMsg').style.display = 'flex';
+  });
+  // Only an administrator with a session gets the way back to the dashboard.
+  fetch('/api/state').then(function (res) {
+    if (res.ok) document.getElementById('backLink').style.display = 'flex';
+  }).catch(function () { /* the page works without it */ });
+</script>
+</body>
+</html>

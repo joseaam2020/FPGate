@@ -17,6 +17,8 @@
 /* Loads and validates a custom image. Returns 0, or -1 with a message in err. */
 int substitute_load(const char *path, char *err, size_t err_len);
 void substitute_free(void);
+/* Content-Type of the custom image in use, or NULL when the generated PNG is used. */
+const char *substitute_custom_type(void);
 
 /*
  * Appends a complete HTTP response to `out`. `width` and `height` are the

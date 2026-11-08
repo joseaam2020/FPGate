@@ -3,21 +3,64 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
+#include <unistd.h>
 
+#include "auth.h"
 #include "proxy.h"
 #include "inspect.h"
+#include "blocklog.h"
+#include "settings.h"
 #include "substitute.h"
 #include "tls_mitm.h"
 
-#define FPGATE_PROXY_VERSION "0.4.0"
+#define FPGATE_PROXY_VERSION "0.5.0"
 #define DEFAULT_PORT 8080
 
-static volatile sig_atomic_t g_stop;
+static volatile sig_atomic_t g_stop, g_reload;
 
 static void on_signal(int sig)
 {
     (void)sig;
     g_stop = 1;
+}
+
+static void on_hup(int sig)
+{
+    (void)sig;
+    g_reload = 1;
+}
+
+/* Runs on the event loop after SIGHUP: re-reads the configuration file. */
+static void reload_settings(void)
+{
+    char err[200];
+    if (settings_reload(err, sizeof err) == 0)
+        fprintf(stderr, "configuration reloaded\n");
+    else
+        fprintf(stderr, "configuration NOT reloaded, keeping the current one: %s\n", err);
+}
+
+/* Reads a line from stdin; with a terminal, nothing is echoed. */
+static int read_password(char *buf, size_t n)
+{
+    struct termios t, quiet;
+    int tty = isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &t) == 0;
+    if (tty) {
+        fprintf(stderr, "Administrator password: ");
+        quiet = t;
+        quiet.c_lflag &= ~(tcflag_t)ECHO;
+        tcsetattr(STDIN_FILENO, TCSANOW, &quiet);
+    }
+    char *got = fgets(buf, (int)n, stdin);
+    if (tty) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &t);
+        fputc('\n', stderr);
+    }
+    if (!got)
+        return -1;
+    buf[strcspn(buf, "\r\n")] = 0;
+    return 0;
 }
 
 static int parse_policy(const char *s, inspect_policy_t *out)
@@ -55,7 +98,13 @@ static void usage(const char *prog)
             "  --on-failure P        accelerator down, slow or erroring: block (default) or allow\n"
             "  --on-unexamined P     GIF, AVIF, too many pixels...: allow (default) or block\n"
             "  --on-corrupt P        damaged image: block (default) or allow\n"
-            "  --substitute FILE     JPEG/PNG/WebP shown instead of a blocked image (default: grey PNG)\n",
+            "  --substitute FILE     JPEG/PNG/WebP shown instead of a blocked image (default: grey PNG)\n"
+            "  --block-log FILE      SQLite log of blocks: host, score, threshold, reason (no URLs, no pixels)\n"
+            "Administration (the HTTPS interface needs -C/-K):\n"
+            "  --config FILE         TOML with the threshold and stand-in image; the admin page writes it, SIGHUP re-reads it\n"
+            "  --admin-credentials F administrator login file; turns the interface on\n"
+            "  --admin-port N        port of the interface (default 8443)\n"
+            "  --set-admin-password F  reads a password, writes F and exits (--admin-user NAME, default admin)\n",
             prog);
 }
 
@@ -83,7 +132,10 @@ int main(int argc, char **argv)
     accel_cfg_t acfg;
     memset(&acfg, 0, sizeof acfg);
     acfg.queue_max = 8;
-    const char *substitute_path = NULL;
+    const char *substitute_path = NULL, *blocklog_path = NULL;
+    const char *config_path = NULL, *admin_creds = NULL, *set_password_file = NULL;
+    const char *admin_user = "admin";
+    int admin_port = 8443;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
@@ -132,6 +184,18 @@ int main(int argc, char **argv)
                 return usage(argv[0]), 2;
         } else if (strcmp(argv[i], "--substitute") == 0 && i + 1 < argc) {
             substitute_path = argv[++i];
+        } else if (strcmp(argv[i], "--block-log") == 0 && i + 1 < argc) {
+            blocklog_path = argv[++i];
+        } else if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (strcmp(argv[i], "--admin-credentials") == 0 && i + 1 < argc) {
+            admin_creds = argv[++i];
+        } else if (strcmp(argv[i], "--admin-port") == 0 && i + 1 < argc) {
+            admin_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--admin-user") == 0 && i + 1 < argc) {
+            admin_user = argv[++i];
+        } else if (strcmp(argv[i], "--set-admin-password") == 0 && i + 1 < argc) {
+            set_password_file = argv[++i];
         } else if (strcmp(argv[i], "-v") == 0) {
             printf("fpgate-proxy %s\n", FPGATE_PROXY_VERSION);
             return 0;
@@ -140,7 +204,19 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    if (port < 1 || port > 65535) {
+    if (set_password_file) {
+        char pw[200], err[200] = "no password given";
+        if (read_password(pw, sizeof pw) != 0 ||
+            auth_write_credentials(set_password_file, admin_user, pw, err, sizeof err) != 0) {
+            explicit_bzero(pw, sizeof pw);
+            fprintf(stderr, "%s\n", err);
+            return 1;
+        }
+        explicit_bzero(pw, sizeof pw);
+        fprintf(stderr, "credentials for '%s' written to %s\n", admin_user, set_password_file);
+        return 0;
+    }
+    if (port < 1 || port > 65535 || admin_port < 1 || admin_port > 65535) {
         fprintf(stderr, "invalid port\n");
         return 2;
     }
@@ -164,6 +240,8 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    if (blocklog_path && blocklog_open(blocklog_path) != 0)
+        return 1;
     if (acfg.path)
         proxy_set_accel(&acfg);
     inspect_configure(&icfg);
@@ -171,6 +249,27 @@ int main(int argc, char **argv)
         fprintf(stderr, "-C and -K must be given together\n");
         return 2;
     }
+    {
+        char err[200];
+        if (settings_init(config_path, err, sizeof err) != 0) {
+            fprintf(stderr, "--config: %s\n", err);
+            return 2;
+        }
+        if (admin_creds && auth_load(admin_creds, err, sizeof err) != 0) {
+            fprintf(stderr, "--admin-credentials: %s\n", err);
+            return 2;
+        }
+        if (admin_creds && !ca_cert) {
+            fprintf(stderr, "--admin-credentials needs the CA (-C/-K): the interface is served over HTTPS\n");
+            return 2;
+        }
+    }
+    if (ca_cert) {
+        admin_cfg_t acf = {.port = admin_creds ? admin_port : 0, .proxy_port = port,
+                           .ca_cert_path = ca_cert};
+        proxy_set_admin(&acf);
+    }
+    proxy_set_reload(&g_reload, reload_settings);
 
     if (ca_cert) {
         char pass[256] = "";
@@ -195,9 +294,12 @@ int main(int argc, char **argv)
     sa.sa_handler = on_signal;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sa.sa_handler = on_hup;
+    sigaction(SIGHUP, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
 
     int rc = proxy_run(port, &g_stop) == 0 ? 0 : 1;
+    blocklog_close();
     substitute_free();
     tls_cleanup();
     return rc;

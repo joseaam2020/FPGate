@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "accel_client.h"
+#include "blocklog.h"
 #include "decode_pool.h"
 #include "http_stream.h"
 #include "image_detect.h"
@@ -33,6 +34,8 @@ void inspect_set_ready(inspect_ready_fn ready) { g_ready = ready; }
 
 void inspect_configure(const inspect_cfg_t *cfg) { g_cfg = *cfg; }
 const inspect_cfg_t *inspect_config(void) { return &g_cfg; }
+
+void inspect_set_threshold(float threshold) { g_cfg.threshold = threshold; }
 const inspect_stats_t *inspect_stats(void) { return &g_stats; }
 
 enum { M_STREAM, M_SNIFF, M_CAPTURE };
@@ -263,6 +266,13 @@ static void log_verdict(const char *host, const struct rctx *c, verdict_t v, con
             ctx_suffix(sfx, sizeof sfx, c));
 }
 
+/* Every block leaves a row in the block log: host, score if there was one, reason. */
+static void record_block(const char *host, const accel_result_t *res, const char *reason)
+{
+    double score = res && res->outcome == ACCEL_R_OK ? (double)res->score : -1.0;
+    blocklog_add(host, score, (double)g_cfg.threshold, reason);
+}
+
 /* Writes the stand-in for a blocked image. Returns 0, or -1 on out of memory. */
 static int emit_replacement(buf_t *dst, int w, int h, int close_conn, const char *reason)
 {
@@ -284,6 +294,7 @@ static void settle_now(inspect_t *i, vclass_t c, const char *reason)
         release_held(i);
         return;
     }
+    record_block(i->host, NULL, reason);
     if (emit_replacement(i->out, 0, 0, i->cur_close, reason) != 0)
         i->oom = 1;
     drop_held(i);
@@ -770,8 +781,10 @@ static void finish_job(ijob_t *j, verdict_t v, vclass_t c, const char *reason,
     if (v == V_ALLOW) {
         emit(i, j->head.p, j->head.len);    /* the original, unchanged */
         emit(i, j->braw.p, j->braw.len);
-    } else if (emit_replacement(&out, j->src_w, j->src_h, j->close_conn, reason) != 0) {
-        i->oom = 1;
+    } else {
+        record_block(j->host, res, reason);
+        if (emit_replacement(&out, j->src_w, j->src_h, j->close_conn, reason) != 0)
+            i->oom = 1;
     }
     wipe_job(j);
     free(j);

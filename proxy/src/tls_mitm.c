@@ -27,6 +27,7 @@
 #define LEAF_REUSE_MARGIN (24 * 3600)
 #define HOST_MAX          256
 #define WRITE_CHUNK       16384
+#define MAX_SAN           8
 
 #ifndef BUILD_EPOCH
 #define BUILD_EPOCH 0
@@ -117,22 +118,30 @@ static int make_leaf(const char *host, unsigned char *der_out, size_t *der_len,
                      time_t *not_after)
 {
     mbedtls_x509write_cert crt;
-    mbedtls_x509_san_list san;
+    mbedtls_x509_san_list san[MAX_SAN];
     mbedtls_asn1_sequence eku;
-    unsigned char serial[16], ip[16], buf[LEAF_DER_MAX + 512];
-    char subject[HOST_MAX + 16], issuer[256], nb[16], na[16];
+    unsigned char serial[16], ip[MAX_SAN][16], buf[LEAF_DER_MAX + 512];
+    char subject[HOST_MAX + 16], issuer[256], nb[16], na[16], names[HOST_MAX], *name[MAX_SAN];
+    int nnames = 0;
     time_t now = time(NULL);
     int ret;
 
     mbedtls_x509write_crt_init(&crt);
-    memset(&san, 0, sizeof san);
+    memset(san, 0, sizeof san);
     memset(&eku, 0, sizeof eku);
 
     if (mbedtls_ctr_drbg_random(&g_drbg, serial, sizeof serial) != 0)
         goto fail;
     serial[0] = (unsigned char)((serial[0] & 0x7F) | 0x01);
 
-    snprintf(subject, sizeof subject, "CN=%s", host);
+    /* `host` is one name, or several separated by commas: all of them go in the SAN. */
+    snprintf(names, sizeof names, "%s", host);
+    for (char *save = NULL, *t = strtok_r(names, ",", &save); t && nnames < MAX_SAN;
+         t = strtok_r(NULL, ",", &save))
+        name[nnames++] = t;
+    if (nnames == 0)
+        goto fail;
+    snprintf(subject, sizeof subject, "CN=%s", name[0]);
     if (mbedtls_x509_dn_gets(issuer, sizeof issuer, &g_ca_crt.subject) < 0)
         goto fail;
 
@@ -159,22 +168,25 @@ static int make_leaf(const char *host, unsigned char *der_out, size_t *der_len,
     if (mbedtls_x509write_crt_set_ext_key_usage(&crt, &eku) != 0)
         goto fail;
 
-    /* The name goes in the SAN: browsers ignore the CN. */
-    if (inet_pton(AF_INET, host, ip) == 1) {
-        san.node.type = MBEDTLS_X509_SAN_IP_ADDRESS;
-        san.node.san.unstructured_name.p = ip;
-        san.node.san.unstructured_name.len = 4;
-    } else if (inet_pton(AF_INET6, host, ip) == 1) {
-        san.node.type = MBEDTLS_X509_SAN_IP_ADDRESS;
-        san.node.san.unstructured_name.p = ip;
-        san.node.san.unstructured_name.len = 16;
-    } else {
-        san.node.type = MBEDTLS_X509_SAN_DNS_NAME;
-        san.node.san.unstructured_name.tag = MBEDTLS_ASN1_IA5_STRING;
-        san.node.san.unstructured_name.p = (unsigned char *)host;
-        san.node.san.unstructured_name.len = strlen(host);
+    /* The names go in the SAN: browsers ignore the CN. */
+    for (int k = 0; k < nnames; k++) {
+        san[k].next = k + 1 < nnames ? &san[k + 1] : NULL;
+        if (inet_pton(AF_INET, name[k], ip[k]) == 1) {
+            san[k].node.type = MBEDTLS_X509_SAN_IP_ADDRESS;
+            san[k].node.san.unstructured_name.p = ip[k];
+            san[k].node.san.unstructured_name.len = 4;
+        } else if (inet_pton(AF_INET6, name[k], ip[k]) == 1) {
+            san[k].node.type = MBEDTLS_X509_SAN_IP_ADDRESS;
+            san[k].node.san.unstructured_name.p = ip[k];
+            san[k].node.san.unstructured_name.len = 16;
+        } else {
+            san[k].node.type = MBEDTLS_X509_SAN_DNS_NAME;
+            san[k].node.san.unstructured_name.tag = MBEDTLS_ASN1_IA5_STRING;
+            san[k].node.san.unstructured_name.p = (unsigned char *)name[k];
+            san[k].node.san.unstructured_name.len = strlen(name[k]);
+        }
     }
-    if (mbedtls_x509write_crt_set_subject_alternative_name(&crt, &san) != 0)
+    if (mbedtls_x509write_crt_set_subject_alternative_name(&crt, san) != 0)
         goto fail;
 
     ret = mbedtls_x509write_crt_der(&crt, buf, sizeof buf, mbedtls_ctr_drbg_random, &g_drbg);

@@ -28,6 +28,8 @@ typedef struct req {
     uint64_t t_queued, t_sent;
 } req_t;
 
+#define DONE_RING 64
+
 static struct {
     accel_cfg_t cfg;
     char path[108];
@@ -43,6 +45,8 @@ static struct {
     uint32_t next_id;
     uint64_t last_probe;
     accel_stats_t st;
+    uint64_t done_ms[DONE_RING];    /* when the last answers arrived, for the throughput */
+    unsigned long done_n;
 } A = { .fd = -1 };
 
 static char g_tag;
@@ -86,7 +90,15 @@ static void complete(req_t *r, accel_outcome_t oc, const accel_resp_hdr_t *resp)
             res.latency_us = resp->latency_us;
         }
         switch (oc) {
-        case ACCEL_R_OK:         A.st.ok++; break;
+        case ACCEL_R_OK:
+            A.st.ok++;
+            if (A.st.ok == 1 || res.latency_us < A.st.lat_min_us)
+                A.st.lat_min_us = res.latency_us;
+            if (res.latency_us > A.st.lat_max_us)
+                A.st.lat_max_us = res.latency_us;
+            A.st.lat_sum_us += res.latency_us;
+            A.done_ms[A.done_n++ % DONE_RING] = now_ms();
+            break;
         case ACCEL_R_ERROR:      A.st.errors++; break;
         case ACCEL_R_TIMEOUT:    A.st.timeouts++; break;
         case ACCEL_R_DOWN:       A.st.down++; break;
@@ -469,4 +481,24 @@ void accel_stop(void)
         complete(q, ACCEL_R_CANCELLED, NULL);
         q = n;
     }
+}
+
+double accel_throughput(void)
+{
+    uint64_t now = now_ms();
+    unsigned long n = A.done_n < DONE_RING ? A.done_n : DONE_RING;
+    unsigned recent = 0;
+    uint64_t oldest = now;
+    for (unsigned long i = 0; i < n; i++) {
+        uint64_t t = A.done_ms[i];
+        if (now - t <= 60000u) {
+            recent++;
+            if (t < oldest)
+                oldest = t;
+        }
+    }
+    if (recent < 2)
+        return 0.0;
+    double span = (double)(now - oldest) / 1000.0;
+    return span > 0.0 ? (double)recent / span : 0.0;
 }

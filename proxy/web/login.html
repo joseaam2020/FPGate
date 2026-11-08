@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPGate — Inicio de sesión</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #FAFAF9;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  input { font-family: inherit; }
+  input:focus { outline: none; border-color: #18181B !important; }
+  button { font-family: inherit; cursor: pointer; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .btn-primary:hover { background: #27272A !important; }
+  a { color: #52525B; text-decoration: none; }
+  a:hover { color: #18181B; }
+  .screen { width: 360px; max-width: 100%; display: flex; flex-direction: column; gap: 28px; }
+</style>
+</head>
+<body>
+
+  <div class="screen" id="loginScreen">
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center">
+      <div style="width: 44px; height: 44px; border-radius: 10px; background: #18181B; display: flex; align-items: center; justify-content: center">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FAFAF9" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+      </div>
+      <div style="font-size: 20px; font-weight: 600; color: #18181B; letter-spacing: -0.01em">FPGate</div>
+      <div style="font-size: 13px; color: #A1A1AA">Panel de administración</div>
+    </div>
+
+    <form id="loginForm" style="display: flex; flex-direction: column; gap: 16px">
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="user" style="font-size: 13px; font-weight: 500; color: #3F3F46">Usuario</label>
+        <input id="user" type="text" placeholder="admin" style="width: 100%; padding: 11px 14px; border-radius: 8px; border: 1px solid #E4E4E7; font-size: 14px; color: #18181B; background: #FFFFFF" autocomplete="username">
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <label for="pass" style="font-size: 13px; font-weight: 500; color: #3F3F46">Contraseña</label>
+        <input id="pass" type="password" placeholder="••••••••" style="width: 100%; padding: 11px 14px; border-radius: 8px; border: 1px solid #E4E4E7; font-size: 14px; color: #18181B; background: #FFFFFF" autocomplete="current-password">
+      </div>
+
+      <div id="errorBox" role="alert" style="display: none; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px; background: #FEF2F2; border: 1px solid #FECACA">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B91C1C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        <span id="errorMsg" style="font-size: 13px; color: #B91C1C; line-height: 1.4"></span>
+      </div>
+
+      <button type="submit" id="submitBtn" style="margin-top: 4px; width: 100%; padding: 12px; border-radius: 8px; border: none; background: #18181B; color: #FAFAF9; font-size: 14px; font-weight: 500" class="btn-primary">Iniciar sesión</button>
+
+    </form>
+
+    <div style="text-align: center; font-size: 12px; color: #A1A1AA; display: flex; flex-direction: column; gap: 8px">
+      <span>Acceso exclusivo para la persona administradora</span>
+      <a href="/certificado" style="font-size: 12px">¿Necesitas instalar el certificado de FPGate?</a>
+    </div>
+
+  </div>
+
+<script>
+  const errorBox = document.getElementById('errorBox');
+  const errorMsg = document.getElementById('errorMsg');
+  const submitBtn = document.getElementById('submitBtn');
+
+  document.getElementById('loginForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const user = document.getElementById('user').value.trim();
+    const pass = document.getElementById('pass').value;
+
+    if (!user || !pass) {
+      showError('Completa el usuario y la contraseña.');
+      return;
+    }
+    errorBox.style.display = 'none';
+    submitBtn.disabled = true;
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: user, password: pass })
+      });
+      if (res.ok) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      let msg = 'No se pudo iniciar sesión. Intenta de nuevo.';
+      try { msg = (await res.json()).message || msg; } catch (err) { /* keep the generic text */ }
+      showError(msg);
+    } catch (err) {
+      showError('No se pudo conectar con FPGate. Revisa la conexión con la placa.');
+    }
+    document.getElementById('pass').value = '';
+    submitBtn.disabled = false;
+  });
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorBox.style.display = 'flex';
+  }
+</script>
+</body>
+</html>

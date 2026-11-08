@@ -34,6 +34,7 @@ int tls_enabled(void);
 /* Re-evaluates the CA validity (RS-07); returns the new tls_enabled(). */
 int tls_ca_recheck(void);
 
+/* `host` is the name or IP the leaf is issued for; a comma-separated list puts all of them in the SAN. */
 tls_session_t *tls_server_new(int *fd, const char *host);
 tls_session_t *tls_client_new(int *fd, const char *host);
 void tls_free(tls_session_t *s);

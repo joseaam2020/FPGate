@@ -210,3 +210,5 @@ int substitute_response(buf_t *out, int width, int height, int close_connection,
     buf_free(&png);
     return rc;
 }
+
+const char *substitute_custom_type(void) { return g_custom ? g_custom_type : NULL; }

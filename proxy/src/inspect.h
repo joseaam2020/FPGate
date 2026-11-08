@@ -53,6 +53,8 @@ typedef struct {
 
 void inspect_configure(const inspect_cfg_t *cfg);
 const inspect_cfg_t *inspect_config(void);
+/* Changes the score at or above which an image is replaced; affects what starts afterwards. */
+void inspect_set_threshold(float threshold);
 const inspect_stats_t *inspect_stats(void);
 
 typedef struct inspect inspect_t;

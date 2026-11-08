@@ -2,9 +2,11 @@
 #include "proxy.h"
 
 #include <errno.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "admin.h"
 #include "buf.h"
 #include "decode_pool.h"
 #include "http_stream.h"
@@ -59,6 +62,7 @@ typedef struct conn {
     int hold;                       /* EPOLLIN off while an image of this pair is being decoded */
     int tunnel;                     /* CONNECT or Upgrade: no HTTP framing */
     int is_connect;
+    int to_admin;                   /* CONNECT to this proxy's own admin port: a plain tunnel, never intercepted */
     tls_session_t *tls;             /* set once the connection is intercepted */
     int hs_done;
     int hs_want;                    /* TLS_WANT_READ / TLS_WANT_WRITE */
@@ -74,6 +78,8 @@ static int g_ep = -1;
 static conn_t *g_all;
 static conn_t *g_dead;
 static int g_nconns;
+static admin_cfg_t g_admin_cfg;     /* the administration interface: port 0 = off */
+static int g_admin_set;
 
 static void set_events(conn_t *c, uint32_t ev, int add)
 {
@@ -270,6 +276,81 @@ static int upstream_connect(const char *host, const char *port)
  * was started, 0 if more data is needed, -1 when the client was answered
  * with an error and must be closed.
  */
+/* Writes all of `p` to a fresh client socket, waiting briefly if its buffer is full. */
+static void send_now(int fd, const char *p, size_t n)
+{
+    time_t t0 = time(NULL);
+    while (n > 0 && time(NULL) - t0 < 3) {
+        ssize_t w = send(fd, p, n, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (w > 0) {
+            p += w;
+            n -= (size_t)w;
+        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            struct pollfd pf = {.fd = fd, .events = POLLOUT};
+            poll(&pf, 1, 200);
+        } else {
+            return;
+        }
+    }
+}
+
+/* The address of this proxy that the client connected to ("" if unknown), IPv4-mapped form removed. */
+static void local_address(int fd, char ip[64])
+{
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    ip[0] = 0;
+    if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0)
+        return;
+    if (ss.ss_family == AF_INET6)
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&ss)->sin6_addr, ip, 64);
+    else
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&ss)->sin_addr, ip, 64);
+    if (strncmp(ip, "::ffff:", 7) == 0)
+        memmove(ip, ip + 7, strlen(ip + 7) + 1);
+}
+
+/* http://fpgate.setup through the proxy: the certificate page and ca.crt. */
+static void serve_setup(conn_t *c, const char *method, size_t method_len, const char *path,
+                        size_t path_len)
+{
+    char ip[64];
+    local_address(c->fd, ip);
+    buf_t out = {0};
+    admin_setup_response(method, method_len, path, path_len, ip, &out);
+    send_now(c->fd, out.p, out.len);
+    buf_free(&out);
+}
+
+/*
+ * CONNECT fpgate.admin: answer it, then hand the socket to the administration
+ * interface, which speaks TLS on it with a certificate for that name. Returns -1
+ * so the caller drops this connection record; the duplicated descriptor lives on.
+ */
+static void adopt_admin(conn_t *c)
+{
+    static const char ok[] = "HTTP/1.1 200 Connection Established\r\n\r\n";
+    send_now(c->fd, ok, sizeof ok - 1);
+    int fd = dup(c->fd);
+    epoll_ctl(g_ep, EPOLL_CTL_DEL, c->fd, NULL);    /* the registration would outlive the close */
+    if (fd >= 0 && admin_adopt(fd) != 0)
+        close(fd);
+}
+
+/*
+ * 1 when a CONNECT targets the administration interface of this very proxy: a
+ * browser that uses the proxy would otherwise be intercepted talking to it.
+ */
+static int is_own_admin(const conn_t *c, const char *host, const char *port)
+{
+    if (g_admin_cfg.port <= 0 || atoi(port) != g_admin_cfg.port)
+        return 0;
+    char ip[64];
+    local_address(c->fd, ip);
+    return strcasecmp(host, "localhost") == 0 || strcmp(host, "127.0.0.1") == 0 ||
+           strcmp(host, "::1") == 0 || (ip[0] && strcmp(host, ip) == 0);
+}
+
 static int handle_request_head(conn_t *c)
 {
     const char *method, *path;
@@ -325,6 +406,23 @@ static int handle_request_head(conn_t *c)
         }
     }
 
+    if (is_connect && strcasecmp(host, ADMIN_VHOST) == 0 && admin_enabled()) {
+        if ((size_t)r == c->hdr_len)
+            adopt_admin(c);
+        return -1;
+    }
+    if (!is_connect && strcasecmp(host, ADMIN_VHOST) == 0 && admin_enabled()) {
+        static const char to_https[] = "HTTP/1.1 302 Found\r\nLocation: https://" ADMIN_VHOST
+                                       "/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        send_now(c->fd, to_https, sizeof to_https - 1);
+        return -1;
+    }
+    if (!is_connect && strcasecmp(host, "fpgate.setup") == 0) {
+        serve_setup(c, method, method_len, target_path ? target_path : "/",
+                    target_path ? target_path_len : 1);
+        return -1;
+    }
+
     /* What was asked, for the image log; the head buffer is freed below. */
     char ctx_path[128] = "", ctx_ref[160] = "";
     if (!is_connect) {
@@ -351,6 +449,7 @@ static int handle_request_head(conn_t *c)
     if (is_connect) {
         c->tunnel = u->tunnel = 1;
         c->is_connect = 1;
+        c->to_admin = is_own_admin(c, host, port);
         snprintf(c->host, sizeof c->host, "%s", host);
         if (buf_append(&c->out, "HTTP/1.1 200 Connection Established\r\n\r\n", 39) != 0)
             goto fail_u;
@@ -789,7 +888,7 @@ static void on_upstream_connect(conn_t *u)
         return;
     }
     u->last = c->last = time(NULL);
-    if (c->is_connect && tls_enabled() && !buf_pending(&u->out))
+    if (c->is_connect && !c->to_admin && tls_enabled() && !buf_pending(&u->out))
         u->state = c->state = ST_SNIFF;
     else
         u->state = c->state = ST_RELAY;
@@ -882,6 +981,20 @@ static void accept_clients(conn_t *l)
         }
         set_events(c, EPOLLIN, 1);
     }
+}
+
+static volatile sig_atomic_t *g_reload_flag;
+static void (*g_reload_fn)(void);
+void proxy_set_reload(volatile sig_atomic_t *flag, void (*fn)(void))
+{
+    g_reload_flag = flag;
+    g_reload_fn = fn;
+}
+
+void proxy_set_admin(const admin_cfg_t *cfg)
+{
+    g_admin_cfg = *cfg;
+    g_admin_set = 1;
 }
 
 static accel_cfg_t g_accel_cfg;
@@ -977,6 +1090,13 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
                 accel_config()->queue_max);
     }
 
+    if (g_admin_set) {
+        if (g_admin_cfg.port > 0 && admin_start(&g_admin_cfg, g_ep) == 0)
+            fprintf(stderr, "admin interface: https://<this address>:%d\n", g_admin_cfg.port);
+        else
+            admin_configure(&g_admin_cfg);    /* http://fpgate.setup still works */
+    }
+
     struct epoll_event evs[64];
     time_t last_sweep = time(NULL);
     while (!*stop) {
@@ -987,12 +1107,20 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
                 accept_clients(&listener);
             else if (c == &pool)
                 inspect_collect(on_inspect_ready);
+            else if (admin_owns(c))
+                admin_on_event(c, evs[i].events);
             else if ((void *)c == accel_tag())
                 accel_on_event(evs[i].events);
             else
                 on_event(c, evs[i].events);
         }
         accel_tick();
+        admin_tick();
+        if (g_reload_flag && *g_reload_flag) {
+            *g_reload_flag = 0;
+            if (g_reload_fn)
+                g_reload_fn();
+        }
         time_t now = time(NULL);
         if (now != last_sweep) {
             last_sweep = now;
@@ -1010,6 +1138,7 @@ int proxy_run(int port, volatile sig_atomic_t *stop)
     reap_dead();                    /* frees the inspectors: pending results become orphans */
     dp_stop();
     inspect_collect(on_inspect_ready);
+    admin_stop();
     accel_stop();                   /* answers what is still pending; the owners are gone */
     close(g_ep);
     close(lfd);

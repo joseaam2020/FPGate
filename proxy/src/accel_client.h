@@ -49,6 +49,8 @@ typedef struct {
 typedef struct {
     unsigned long requests, ok, errors, timeouts, down, queue_full, cancelled;
     unsigned long degraded_entries;
+    uint32_t lat_min_us, lat_max_us;    /* inference time the accelerator reports */
+    uint64_t lat_sum_us;
 } accel_stats_t;
 
 /* Returns 0, or -1 if the path is unusable. Does not connect yet. */
@@ -60,6 +62,8 @@ int accel_degraded(void);
 const accel_stats_t *accel_stats(void);
 /* The settings in force, with defaults filled in. */
 const accel_cfg_t *accel_config(void);
+/* Answers per second over the last minute (0 when idle). */
+double accel_throughput(void);
 
 /* Compare with epoll_event.data.ptr to know an event belongs to the accelerator. */
 void *accel_tag(void);
