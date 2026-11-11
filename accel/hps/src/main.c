@@ -85,8 +85,10 @@ static void print_stats(const model_t *model, double total)
                s->t_att_pack, s->t_att_s, s->t_att_sm, s->t_att_pv, s->t_att_read,
                g_opt.check ? (s->att_mismatches ? "  -- DIFFERS FROM THE CPU" : "  -- identical to the CPU") : "");
     printf("    time by stage (s): attention %.2f, LayerNorm %.2f, patch_embed %.2f, RoPE %.2f, SwiGLU %.2f, quantise %.2f, "
-           "FPGA path %.2f, rest %.2f, total %.2f\n",
-           s->t_attn, s->t_ln, s->t_patch, s->t_rope, s->t_swiglu, s->t_quant, fpga_hps, total - listed - fpga_hps, total);
+           "%s %.2f, rest %.2f, total %.2f\n",
+           s->t_attn, s->t_ln, s->t_patch, s->t_rope, s->t_swiglu, s->t_quant,
+           s->pl_wall > 0 ? "PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped)" : "FPGA path",
+           fpga_hps, total - listed - fpga_hps, total);
 }
 
 static volatile sig_atomic_t g_stop;

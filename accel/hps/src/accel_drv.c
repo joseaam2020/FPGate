@@ -147,8 +147,17 @@ void accel_hw_close(accel_hw_t *h)
 
 int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
 {
-    if (h->sim)
-        return accel_sim_start(h, op);
+    if (h->in_flight) {
+        /* on the real engine a second START would reset it mid-operation and lose the first result */
+        fprintf(stderr, "accel: start while an operation is still in flight (call accel_hw_wait first)\n");
+        return -1;
+    }
+    if (h->sim) {
+        if (accel_sim_start(h, op) != 0)
+            return -1;
+        h->in_flight = 1;
+        return 0;
+    }
     const int out16 = op->out_bits > 8 && !op->raw32;
     const uint32_t elem = op->raw32 ? 4u : (out16 ? 2u : 1u);
     wr(h, R_CTRL, CTRL_RESET_SOFT);          /* clean state, clears the counters */
@@ -164,6 +173,8 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
     __sync_synchronize();
     h->t_start = now_s();
     wr(h, R_CTRL, CTRL_START);
+    (void)rd(h, R_STATUS);                   /* read back: the START write has reached the engine (BUSY is up) */
+    h->in_flight = 1;
     return 0;
 }
 
@@ -176,6 +187,11 @@ int accel_hw_busy(const accel_hw_t *h)
 
 int accel_hw_wait(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s)
 {
+    if (!h->in_flight) {
+        fprintf(stderr, "accel: wait without a started operation\n");
+        return -1;
+    }
+    h->in_flight = 0;
     if (h->sim)
         return accel_sim_wait(h, st);
     const double t0 = h->t_start;

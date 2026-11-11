@@ -8,11 +8,16 @@ fail=0
 run() { # name, options
     name=$1; shift
     "$BIN" --selftest "$N" --pkg "$PK" --index "$IDX" --sim --check --logits "$@" > "$tmp/$name.out" 2>&1
+    rc=$?
     grep -E '^    logits' "$tmp/$name.out" > "$tmp/$name.logits"
-    if grep -qE 'differ from the CPU|DIFFER FROM|MISMATCH|rror' "$tmp/$name.out"; then
+    got=$(grep -c '^    logits' "$tmp/$name.out")
+    if [ $rc -ne 0 ] || [ "$got" -ne "$N" ]; then
+        echo "FAIL $name: exit status $rc, $got of $N logits lines (the binary crashed or did not finish)"; fail=1
+    fi
+    if grep -qE 'differ from the CPU|DIFFER FROM|MISMATCH|accel.*(failed|did not finish)|pipeline: ' "$tmp/$name.out"; then
         echo "FAIL $name: a layer differs from the CPU result or an error was reported"; fail=1
     fi
-    echo "ran $name: $(grep -c '^    logits' "$tmp/$name.out") logits lines"
+    echo "ran $name: $got logits lines (exit $rc)"
 }
 run base --no-overlap --no-pipeline
 for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--chunk 512" "pipe48:--chunk 48"; do

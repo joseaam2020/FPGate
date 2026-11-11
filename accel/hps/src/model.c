@@ -413,15 +413,20 @@ static int pl_prepare(model_t *m)
         const block_t *B = &p->blocks[bi];
         const layer_t *ls[7] = {B->q, B->k, B->v, B->proj, B->fc1g, B->fc1x, B->fc2};
         for (int i = 0; i < 7; i++) {
-            if (!fpga_supports(ls[i]) || !m->w_off[ls[i] - p->layers])
+            if (!fpga_supports(ls[i]) || !m->w_off[ls[i] - p->layers]) {
+                fprintf(stderr, "model: pipeline off: layer %s is not on the FPGA\n", ls[i]->name);
                 return 0;                   /* some layer stays on the CPU: no pipeline */
+            }
             if (ls[i]->in > maxk) maxk = ls[i]->in;
             if (ls[i]->out > maxk) maxk = ls[i]->out;
         }
     }
     const size_t slot = ((size_t)cap * maxk * 2 + 63) & ~(size_t)63;
-    if (nj > PL_MAX || slot * (size_t)nj > PL_AREA)
+    if (nj > PL_MAX || slot * (size_t)nj > PL_AREA) {
+        fprintf(stderr, "model: pipeline off: %d chunks of %d rows do not fit %d slots (use a larger --chunk)\n", nj,
+                cap, PL_MAX);
         return 0;
+    }
     m->pl_slot = slot;
     for (int j = 0; j < nj; j++) {
         m->pl_n[j] = malloc((size_t)cap * maxk * sizeof(float));
@@ -577,6 +582,7 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
     accel_op_t op;
     double t_op = 0;
     const double w0 = now_s();
+    m->a_ok = 0;                        /* the region's activation area is about to hold chunk data (also if we fail) */
     while (remaining > 0) {
         /* 1. collect the operation that has finished */
         if (inflight >= 0 && !accel_hw_busy(m->hw)) {

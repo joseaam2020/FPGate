@@ -24,6 +24,7 @@ typedef struct accel_hw {
     int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
     struct accel_sim *sim;      /* software engine (accel_hw_open_sim); NULL on the real hardware */
     double t_start;             /* wall time of the last accel_hw_start */
+    int in_flight;              /* an operation was started and not yet collected with accel_hw_wait */
 } accel_hw_t;
 
 typedef struct {
