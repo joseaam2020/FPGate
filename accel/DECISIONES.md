@@ -362,3 +362,19 @@ Atención en la FPGA, por 96 cabezas (12 bloques × 8): 67.9 M ciclos las puntua
 - El único camino con hold negativo en la #4 es de un PE a un multiplicador de otro PE del arreglo (por un registro que la síntesis física duplicó). Apagar la síntesis física (#7) empeoró el hold en todas las esquinas: esa opción estaba corrigiéndolo.
 - **Decisión: el bitstream de referencia es el de la #4** (`quartus_hps/h5_120MHz_DE10_Standard_GHRD.sof`, `rbf_out/h5_120MHz/soc_system.rbf`), probado en la placa. Setup holgado; una sola violación de hold de ≤ 0.11 ns en una esquina fría.
 - **Receta exacta de la #4:** RTL de `accel/rtl` sin cambios desde el 10-nov 20:45; `build_system.tcl` con `ACCEL_MHZ 120` (`qsys-script`, `qsys-generate`); `DE10_Standard_GHRD.qsf` con `PHYSICAL_SYNTHESIS_COMBO_LOGIC ON`, `..._REGISTER_DUPLICATION ON`, `..._REGISTER_RETIMING ON`, `..._EFFORT EXTRA`, `OPTIMIZE_HOLD_TIMING "ALL PATHS"`, `OPTIMIZE_MULTI_CORNER_TIMING ON` y **sin** líneas `SEED` ni `FITTER_EFFORT`; `quartus_sh --flow compile DE10_Standard_GHRD`. El `.qsf` del repositorio es ese. No se ha verificado que recompilar dé el mismo `.sof` bit a bit (Quartus suele ser determinista con las mismas entradas); el `.sof` y el `.rbf` de la #4 están guardados para no depender de eso.
+
+## Optimización del ARM, parte 1 (2026-11-11, `accel/hps`)
+
+Objetivo: bajar de los 10 s del proxy el tiempo de la imagen (14.2 s medidos, ≈ 9.3 s son del ARM). Todo lo de esta parte es **exacto**: no cambia ningún resultado respecto a la versión anterior.
+
+- **Dos núcleos:** el build ARM no pasaba `-fopenmp`, así que las pragmas se ignoraban. Ahora el `Makefile` lo incluye y se paralelizan GEMM, LayerNorm, RoPE, SwiGLU, sumas residuales, `patch_embed` (unfold y des-cuantización), empaquetado y conversión de lectura.
+- **Cuantización rápida:** `quantize_f32` usa `x·(1/sc)` con redondeo por número mágico y recalcula con la división exacta solo cerca de los empates. 226 M de valores contra `rintf(x/sc)`: 0 diferencias.
+- **Sin ida y vuelta de `ctx`:** si `s_ctx` es igual a la escala de entrada de `proj`, se usa el INT8 directamente (sin pasar a float y cuantizar de nuevo); si no, el camino largo.
+- **NEON:** GEMM INT8 (1 fila × 4 columnas, lo usa `patch_embed`) y transposición 16×16 en el empaquetado de activaciones de 8 y 16 bits.
+- **LayerNorm:** 4 acumuladores `double` independientes en las sumas (rompen la cadena de latencia). Salida bit a bit igual a la anterior (0 de 1.5 M).
+- **Verificación sin placa:** el contenedor `fpgate-proxy-dev` trae `qemu-arm`, así que el binario ARM real (NEON, OpenMP estático) corre contra el oráculo: bloques 0 y 11 bit-exactos, logit 0.02312, 20/20 decisiones (peor diferencia 0.07451, igual que antes). `make test-kernels` (en `accel/hps`) ejecuta cuatro pruebas de kernel (`test_quant`, `test_gemm`, `test_ln`, `test_pack_rand`) en nativo y en ARM bajo qemu; todas dan 0 diferencias. qemu no sirve para medir tiempos.
+- **Sin medir en la placa todavía.** Referencia a comparar (14.2 s): cuantizar 2.40, empaquetar/leer 2.03, LayerNorm 1.59, SwiGLU 1.05, `patch_embed` 1.02, RoPE 0.54, resto 0.66.
+
+### Punto de retorno antes del solapamiento ARM/FPGA
+
+El siguiente paso (solapar el trabajo del ARM con el de la FPGA, con hilos y sincronización) es el más delicado. **La etiqueta git `accel-pre-solape` marca el último commit sin solapamiento.** Si el solapamiento falla en la placa (cuelgues, resultados distintos o más lento), se vuelve con `git checkout accel-pre-solape -- accel/hps` (o `git reset --hard accel-pre-solape` si se quiere descartar todo lo posterior; no hay cambios de FPGA en juego, el bitstream es el mismo). Regla del solapamiento: debe poder desactivarse con una opción de línea de comandos (`--no-overlap`) y el resultado con y sin él debe ser idéntico bit a bit.
