@@ -168,13 +168,22 @@ void layer_norm(const float *x, int rows, int d, const float *g, const float *b,
 void rope_int(const int16_t *x, int tokens, int stride, int heads, int hd, const int16_t *cos_tab,
               const int16_t *sin_tab, int frac, int pre_shift, int8_t *out)
 {
+    rope_int_range(x, 0, tokens, stride, heads, hd, cos_tab, sin_tab, frac, pre_shift, out);
+}
+
+/* x and out point at the first of `tokens` rows, which are tokens t0 .. t0 + tokens - 1 of the sequence
+ * (token 0 is the class token: no rotation) */
+void rope_int_range(const int16_t *x, int t0, int tokens, int stride, int heads, int hd, const int16_t *cos_tab,
+                    const int16_t *sin_tab, int frac, int pre_shift, int8_t *out)
+{
     const int sh = frac + pre_shift;
     const int64_t rnd = (int64_t)1 << (sh - 1);
 #pragma omp parallel for schedule(static)
-    for (int t = 0; t < tokens; t++) {
+    for (int tl = 0; tl < tokens; tl++) {
+        const int t = t0 + tl;
         for (int h = 0; h < heads; h++) {
-            const int16_t *xi = x + (size_t)t * stride + (size_t)h * hd;
-            int8_t *o = out + (size_t)t * stride + (size_t)h * hd;
+            const int16_t *xi = x + (size_t)tl * stride + (size_t)h * hd;
+            int8_t *o = out + (size_t)tl * stride + (size_t)h * hd;
             if (t == 0) {
                 for (int d = 0; d < hd; d++) {
                     int64_t v = (xi[d] + ((int64_t)1 << (pre_shift - 1))) >> pre_shift;

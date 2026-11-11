@@ -32,8 +32,10 @@ static struct {
     int fpga, fpga_attn, check, verbose, blocks;
     int sim;                    /* software engine instead of the FPGA (tests on a PC) */
     int chunk;                  /* rows per engine operation, -1 = model default, 0 = no overlap */
+    int pipeline;               /* row-chunk pipeline between attentions */
+    int logits;                 /* print the logits with 9 digits (compare two runs bit by bit) */
     accel_hw_t hw;
-} g_opt = {.chunk = -1};
+} g_opt = {.chunk = -1, .pipeline = 1};
 
 #define FPGA_REGION_MAP 0x6000000u      /* 96 MiB, see model.c */
 
@@ -56,6 +58,7 @@ static int setup_backend(model_t *model)
         return -1;
     if (g_opt.chunk >= 0)
         model_set_chunk(model, g_opt.chunk);
+    model_set_pipeline(model, g_opt.pipeline);
     return 0;
 }
 
@@ -71,6 +74,10 @@ static void print_stats(const model_t *model, double total)
                s->ops, s->cycles, s->cycles / (g_opt.hw.mhz * 1e6), g_opt.hw.mhz, s->t_pack, s->t_run, s->t_read,
                fpga_hps,
                g_opt.check ? (s->mismatches ? "  -- OUTPUTS DIFFER FROM THE CPU" : "  -- every output identical to the CPU") : "");
+    if (g_opt.fpga && s->pl_wall > 0)
+        printf("    pipeline between attentions: wall %.3f s; ARM busy: LayerNorm %.2f, quantise %.2f, pack %.2f, read %.2f, "
+               "SwiGLU %.2f, RoPE %.2f, other %.2f; ARM waiting for the engine %.2f s\n",
+               s->pl_wall, s->pl_ln, s->pl_quant, s->pl_pack, s->pl_read, s->pl_swiglu, s->pl_rope, s->pl_other, s->pl_idle);
     if (g_opt.fpga_attn)
         printf("    attention on the FPGA: %llu + %llu + %llu cycles (scores, softmax, context; %.3f s at %.0f MHz); HPS: pack Q/K/V %.3f s, "
                "scores %.3f s, softmax %.3f s, context %.3f s, read %.3f s%s\n",
@@ -508,6 +515,8 @@ static int selftest(const pkg_t *pkg, int n, const char *stages)
         double t0 = now_s();
         sc.patch_sha = v->patch_sha[0] ? v->patch_sha : NULL;
         model_stats_reset(model);
+        if (g_opt.fpga)
+            model_set_pipeline(model, g_opt.pipeline && !(i == 0 && stages));   /* the stage table needs whole layers */
         model_forward(model, img, lg, i == 0 ? stage_cb : NULL, &sc);
         double dt = now_s() - t0;
         if (g_opt.blocks > 0) {
@@ -527,6 +536,8 @@ static int selftest(const pkg_t *pkg, int n, const char *stages)
             if (d > md)
                 md = d;
         }
+        if (g_opt.logits)
+            printf("    logits %.9g %.9g %.9g %.9g\n", lg[0], lg[1], lg[2], lg[3]);
         float s_got = model_score(lg), s_ref = model_score(ex);
         int same = (s_got >= 0.5f) == (s_ref >= 0.5f);
         same_decision += same;
@@ -583,6 +594,10 @@ int main(int argc, char **argv)
             g_opt.fpga = g_opt.sim = 1;
         else if (!strcmp(argv[i], "--no-overlap"))
             g_opt.chunk = 0;
+        else if (!strcmp(argv[i], "--no-pipeline"))
+            g_opt.pipeline = 0;
+        else if (!strcmp(argv[i], "--logits"))
+            g_opt.logits = 1;
         else if (!strcmp(argv[i], "--chunk") && i + 1 < argc)
             g_opt.chunk = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--check"))

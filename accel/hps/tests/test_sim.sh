@@ -1,0 +1,28 @@
+#!/bin/sh
+# Overlap and pipeline tests on the software engine (--sim): every mode must give the same logits, bit for
+# bit, as the sequential mode, and every layer must equal the CPU result (--check).
+# usage: tests/test_sim.sh BINARY PACKAGE_DIR INDEX [IMAGES]
+BIN=$1; PK=$2; IDX=$3; N=${4:-2}
+tmp=$(mktemp -d)
+fail=0
+run() { # name, options
+    name=$1; shift
+    "$BIN" --selftest "$N" --pkg "$PK" --index "$IDX" --sim --check --logits "$@" > "$tmp/$name.out" 2>&1
+    grep -E '^    logits' "$tmp/$name.out" > "$tmp/$name.logits"
+    if grep -qE 'differ from the CPU|DIFFER FROM|MISMATCH|rror' "$tmp/$name.out"; then
+        echo "FAIL $name: a layer differs from the CPU result or an error was reported"; fail=1
+    fi
+    echo "ran $name: $(grep -c '^    logits' "$tmp/$name.out") logits lines"
+}
+run base --no-overlap --no-pipeline
+for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--chunk 512" "pipe48:--chunk 48"; do
+    name=${mode%%:*}; opts=${mode#*:}
+    run "$name" $opts
+    if ! cmp -s "$tmp/base.logits" "$tmp/$name.logits"; then
+        echo "FAIL $name: logits differ from the sequential run"; diff "$tmp/base.logits" "$tmp/$name.logits" | head -4; fail=1
+    else
+        echo "PASS $name: logits identical to the sequential run"
+    fi
+done
+rm -rf "$tmp"
+[ $fail -eq 0 ] && echo "ALL PASSED" || { echo "FAILED"; exit 1; }

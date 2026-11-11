@@ -20,6 +20,9 @@ typedef struct {
     unsigned long long cycles;  /* sum of the engine's CYCLES counters */
     double t_pack, t_run, t_read;   /* HPS time packing inputs, waiting for the engine, reading outputs */
     double t_lin_wall;              /* wall time of the overlapped linear layers (pack + wait + read overlap) */
+    /* row-chunk pipeline between attentions: wall time, ARM busy time by kind of work (they add up to more
+     * than the wall time when the ARM and the engine overlap), ARM time spent waiting for the engine */
+    double pl_wall, pl_ln, pl_quant, pl_pack, pl_read, pl_swiglu, pl_rope, pl_other, pl_idle;
     unsigned long long mismatches;  /* outputs that differ from the CPU result (check mode) */
     /* HPS time by stage, seconds (CPU work that stays on the ARM) */
     double t_patch, t_ln, t_rope, t_attn, t_swiglu, t_quant;
@@ -40,6 +43,11 @@ int model_attach_fpga(model_t *m, struct accel_hw *hw, int check, int verbose, i
 /* rows per engine operation for the overlapped linear layers (rounded up to a multiple of 16);
  * 0 = no overlap: the ARM waits for every operation (the behaviour before overlapping). Default 256. */
 void model_set_chunk(model_t *m, int rows);
+/* 1 (default when the FPGA is attached): between two attentions the rows go through LayerNorm, the linear
+ * layers, RoPE, SwiGLU and the residual sums in chunks, so the ARM works on one chunk while the engine
+ * works on another. 0: every layer runs on all rows before the next starts (the behaviour before the
+ * pipeline). Needs model_set_chunk > 0; falls back by itself when something does not fit. */
+void model_set_pipeline(model_t *m, int on);
 /* run only the first n blocks (tests); 0 = all */
 void model_limit_blocks(model_t *m, int n);
 const model_stats_t *model_stats(const model_t *m);

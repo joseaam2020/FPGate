@@ -392,3 +392,25 @@ Empieza después de la etiqueta `accel-pre-solape`. Se vuelve a la versión sin 
 **Lo que no se sabe hasta probar en la placa:** el tiempo real. Posible freno: el ARM y la FPGA comparten la DDR3 y la región es no cacheable, así que empaquetar y leer a la vez que el motor lee y escribe puede hacer lento a cualquiera de los dos. Hay que mirar `FPGA: ... layers wall` frente a la suma de pack + wait + read.
 
 **Siguiente idea (no hecha):** casi todo entre dos atenciones es por filas (LayerNorm, cuantizar, GEMM, RoPE, SwiGLU, sumas), así que se podría hacer una tubería por trozos de filas entre capas para que el ARM y la FPGA trabajen a la vez también en esas etapas. Es una reestructuración mayor; se decide con los tiempos medidos.
+
+## Solapamiento ARM/FPGA, paso 2: tubería por trozos de filas entre atenciones (2026-11-11, `accel/hps`)
+
+Empieza después de la etiqueta `accel-pre-tuberia` (último commit con el solapamiento solo dentro de cada capa). Volver: `git checkout accel-pre-tuberia -- accel/hps`, o `--no-pipeline` en la línea de comandos (usa el código del paso 1), o `--no-overlap` (el secuencial original).
+
+**Idea.** Entre la atención de un bloque y la del siguiente todo es por filas: proj, suma residual, LayerNorm 2, fc1 (gate y up), SwiGLU, LayerNorm 3, fc2, suma residual, y luego LayerNorm 1, q, k, v y RoPE del bloque siguiente. Solo la atención necesita todas las filas. Las 1025 filas se parten en trozos de 256 (5 trozos) y cada trozo recorre la misma lista de pasos. Un paso es trabajo del ARM o una operación del motor. Mientras el motor trabaja con un trozo, el ARM ejecuta pasos listos de otros trozos. Antes, la FPGA esperaba en LayerNorm, cuantizar, SwiGLU y RoPE, y el ARM esperaba en cada capa: los dos tiempos se sumaban. En teoría el total pasa a ser el mayor de los dos.
+
+**Diseño.**
+- Planificador de un solo hilo (`pl_run` en `model.c`): una operación del motor a la vez; tras cada paso del ARM consulta sin bloquear el estado del motor (`accel_hw_busy`), recoge la operación terminada y lanza la siguiente de cualquier trozo que la espere (el de menor índice). Sin hilos nuevos ni cerrojos.
+- Cada trozo tiene su hueco propio en las áreas de activaciones y de salidas de la región (1 MiB por trozo con 256 filas; hasta 8 trozos) y sus propios buffers de trabajo (salida de LayerNorm, entrada cuantizada, empaquetado). Los trozos solo tocan filas distintas de las matrices compartidas (`x`, `q16`, `g16`…), así que no hay conflictos de datos.
+- Cada paso hace exactamente lo mismo que el código secuencial sobre sus filas; RoPE recibe la posición absoluta del trozo (`rope_int_range`). Si algo no encaja (una capa fuera de la FPGA, más de 8 trozos, buffers que no caben) el modelo vuelve solo al camino anterior.
+- La región de la atención no se toca: la atención sigue siendo la barrera entre tramos.
+
+**Opciones.** `--no-pipeline`, `--no-overlap`, `--chunk N`, `--logits` (imprime los logits con 9 cifras para comparar dos ejecuciones bit a bit), `--sim` (motor simulado). Con `--stages` la imagen 0 usa el camino sin tubería (la tabla de etapas necesita las matrices completas).
+
+**Pruebas sin placa (`make test-sim`, motor simulado por hilo con retardo, y el binario ARM bajo qemu).**
+- Logits idénticos bit a bit, en 2 imágenes, con: sin solapamiento, solape por capa, tubería con trozos de 256, 160, 512 y 48 (este último cae al solape por capa por falta de huecos). Cada trozo de cada capa es igual al resultado de la CPU (`--check`).
+- 20 imágenes: los logits de la tubería con el motor simulado son idénticos bit a bit a los del backend de CPU; 20/20 decisiones.
+- Control negativo: si todos los trozos escriben su salida en el mismo hueco (un error de reparto de memoria), `--check` marca ≈ 131 000 de 131 072 salidas distintas por capa.
+- Los tiempos del simulador no significan nada: el "motor" gasta CPU del PC y el ARM espera por él.
+
+**Lo que se sabe y lo que no.** Sabemos que la lógica de orden y de memoria es correcta. No sabemos el tiempo real: puede mejorar mucho (si ARM y FPGA se reparten bien) o poco (si compiten por la DDR3, que la región no cacheable agrava). El resumen de la placa trae una línea nueva `pipeline between attentions: wall X s; ARM busy: …; ARM waiting for the engine Y s`: si `ARM waiting` es grande, el motor es el cuello de botella (bien: queda lo mínimo); si es pequeño y `wall` es mayor que los ciclos del motor (`FPGA: … cycles (… s)`), el ARM es el cuello de botella.

@@ -22,6 +22,7 @@
 struct accel_sim {
     pthread_t th;
     int running;
+    volatile int done;          /* set by the worker when the output is completely written */
     accel_op_t op;
     int failed;
     uint64_t cycles;
@@ -121,6 +122,21 @@ done:
     return NULL;
 }
 
+/* thread entry: run the operation, then publish completion */
+static void *sim_entry(void *arg)
+{
+    struct accel_sim *sim = arg;
+    sim_thread(arg);
+    __sync_synchronize();
+    sim->done = 1;
+    return NULL;
+}
+
+int accel_sim_busy(const accel_hw_t *h)
+{
+    return h->sim->running && !h->sim->done;
+}
+
 int accel_hw_open_sim(accel_hw_t *h, size_t region_len)
 {
     memset(h, 0, sizeof *h);
@@ -151,7 +167,8 @@ int accel_sim_start(accel_hw_t *h, const accel_op_t *op)
     }
     s->op = *op;
     s->failed = 1;
-    if (pthread_create(&s->th, NULL, sim_thread, s) != 0)
+    s->done = 0;
+    if (pthread_create(&s->th, NULL, sim_entry, s) != 0)
         return -1;
     s->running = 1;
     return 0;

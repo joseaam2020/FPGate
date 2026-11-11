@@ -34,6 +34,9 @@ void layer_norm(const float *x, int rows, int d, const float *g, const float *b,
  * Token 0 (the class token) is not rotated. cos/sin are [tokens-1][hd] in Q1.(frac). */
 void rope_int(const int16_t *x, int tokens, int stride, int heads, int hd, const int16_t *cos_tab,
               const int16_t *sin_tab, int frac, int pre_shift, int8_t *out);
+/* the same for rows t0 .. t0 + tokens - 1 only; x and out point at the first of those rows */
+void rope_int_range(const int16_t *x, int t0, int tokens, int stride, int heads, int hd, const int16_t *cos_tab,
+                    const int16_t *sin_tab, int frac, int pre_shift, int8_t *out);
 
 /* Integer softmax of one row of n scores (UQ0.softmax_bits output, bit-exact with export_check.softmax) */
 void softmax_row_int(const pkg_t *p, const block_t *b, const int32_t *S, int n, uint16_t *P);

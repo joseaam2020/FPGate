@@ -38,14 +38,11 @@ test-kernels: $(wildcard src/*.c) $(wildcard tests/*.c)
 	  $(ARMCC) tests/$$t.c $$S -lm -o build/arm/$$t; echo "== arm $$t"; qemu-arm build/arm/$$t; \
 	done
 
-# Overlap tests: the software engine (--sim) runs the linear layers on a worker thread; every layer is
-# compared with the CPU result (--check) for several chunk sizes. Must print "identical to the CPU" only.
+# Overlap and pipeline tests on the software engine (--sim): all modes give the same logits as the
+# sequential one and every layer equals the CPU result. Chunk 48 gives 22 chunks: more than the pipeline
+# has slots, so it must fall back to the per-layer overlap by itself.
 test-sim: build/native/fpgate-accel
-	set -e; for o in "--no-overlap" "" "--chunk 64" "--chunk 1000"; do \
-	  echo "== sim $$o"; \
-	  build/native/fpgate-accel --selftest 1 --pkg $(PKG) --index pkg/e1_r7.idx --sim --check $$o 2>&1 \
-	    | grep -E 'FPGA:|\*\*\*|decisions'; \
-	done
+	sh tests/test_sim.sh build/native/fpgate-accel $(PKG) pkg/e1_r7.idx 2
 PKG      ?= /repo/model/quant/release/e1_r7
 
 clean:

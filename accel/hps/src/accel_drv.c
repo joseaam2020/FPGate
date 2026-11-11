@@ -167,6 +167,13 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
     return 0;
 }
 
+int accel_hw_busy(const accel_hw_t *h)
+{
+    if (h->sim)
+        return accel_sim_busy(h);
+    return (rd(h, R_STATUS) & ST_BUSY) != 0;
+}
+
 int accel_hw_wait(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s)
 {
     if (h->sim)

@@ -69,7 +69,12 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op);
  * -1 on error or timeout (the engine is reset so the next operation starts clean). */
 int accel_hw_wait(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s);
 
+/* Non-blocking: 1 while the operation started with accel_hw_start is still running, 0 when it has finished
+ * (accel_hw_wait still has to be called to collect the result). */
+int accel_hw_busy(const accel_hw_t *h);
+
 /* internal: software engine (accel_sim.c) */
+int accel_sim_busy(const accel_hw_t *h);
 int accel_sim_start(accel_hw_t *h, const accel_op_t *op);
 int accel_sim_wait(accel_hw_t *h, accel_stat_t *st);
 void accel_sim_free(accel_hw_t *h);
