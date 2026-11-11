@@ -161,7 +161,8 @@ static int linear_fpga(model_t *m, const layer_t *L, int rows, int16_t *out)
     if (out16)
         memcpy(out, m->rdbuf, n * 2);
     else
-        for (size_t i = 0; i < n; i++)
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)n; i++)
             out[i] = ((const int8_t *)m->rdbuf)[i];
     double t3 = now_s();
     m->st.ops++;
@@ -220,6 +221,7 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
 
     const double t_patch0 = now_s();
     /* ---- patch embedding: unfold (channel, ky, kx), INT8 GEMM, float de-quantisation ---- */
+#pragma omp parallel for schedule(static) collapse(2)
     for (int py = 0; py < side; py++)
         for (int px = 0; px < side; px++) {
             float *c = m->cols + (size_t)(py * side + px) * ps;
@@ -233,6 +235,7 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
         const layer_t *L = p->patch_embed;
         quantize_f32(m->cols, (size_t)NP * ps, L->s_x, 8, m->a8);
         gemm_s8(m->a8, L->w, m->acc, NP, L->out, L->in);
+#pragma omp parallel for schedule(static)
         for (int t = 0; t < NP; t++)
             for (int c = 0; c < D; c++) {
                 int64_t a = m->acc[(size_t)t * D + c];
@@ -267,7 +270,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
 
         TIMED(t_rope, rope_int(m->q16, T, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->q8));
         TIMED(t_rope, rope_int(m->k16, T, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->k8));
-        for (size_t i = 0; i < (size_t)T * A; i++)
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)T * A; i++)
             m->v8[i] = (int8_t)m->v16[i];
 
         if (m->fpga_attn) {
@@ -280,12 +284,24 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
             snprintf(nm, sizeof nm, "b%d.ctx_i", bi);
             dbg(dbg_ctx, nm, m->ctx8, (size_t)T * A, 1);
         }
-        for (size_t i = 0; i < (size_t)T * A; i++)
-            m->ctxf[i] = (float)((double)m->ctx8[i] * B->s_ctx);
-
-        if (linear_int(m, B->proj, m->ctxf, T, m->y16, 0)) return -1;
+        /* proj quantises ctx * s_ctx with its own input scale. When both scales are the same, the
+         * float round trip returns the INT8 value unchanged (|c| <= 127, relative error ~1e-5 of one
+         * step, far from a rounding boundary), so ctx8 is used directly. Otherwise do it the long way. */
+        const int ctx_direct = B->proj->in_bits == 8 && B->proj->in == A &&
+                               fabs(B->s_ctx - B->proj->s_x) <= 1e-9 * fabs(B->proj->s_x);
+        if (ctx_direct) {
+            TIMED(t_quant, memcpy(m->a8, m->ctx8, (size_t)T * A));
+            m->a_ok = 0;
+            if (linear_int(m, B->proj, NULL, T, m->y16, 1)) return -1;
+        } else {
+#pragma omp parallel for schedule(static)
+            for (ptrdiff_t i = 0; i < (ptrdiff_t)T * A; i++)
+                m->ctxf[i] = (float)((double)m->ctx8[i] * B->s_ctx);
+            if (linear_int(m, B->proj, m->ctxf, T, m->y16, 0)) return -1;
+        }
         dbg16(dbg, dbg_ctx, bi, "proj_w", m->y16, (size_t)T * D);
-        for (size_t i = 0; i < (size_t)T * D; i++)
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)T * D; i++)
             m->x[i] += (float)((double)m->y16[i] * B->s_proj);
 
         TIMED(t_ln, layer_norm(m->x, T, D, B->n2_g, B->n2_b, p->ln_eps, m->n));
@@ -297,7 +313,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
         const double t_sw0 = now_s();
         const int64_t sw_rnd = (int64_t)1 << (B->sw_sh - 1);
         const int qm_in = qmax_of(p->silu_in_bits);
-        for (size_t i = 0; i < (size_t)T * N; i++) {
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)T * N; i++) {
             int64_t y = (int64_t)B->silu[m->g16[i] + qm_in] * m->u16[i];
             y = (y * B->sw_m0 + sw_rnd) >> B->sw_sh;
             m->h16[i] = (int16_t)(y > 32767 ? 32767 : y < -32767 ? -32767 : y);
@@ -309,7 +326,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
         TIMED(t_ln, layer_norm(m->hh, T, N, B->mlpn_g, B->mlpn_b, p->ln_eps, m->n));
         if (linear_int(m, B->fc2, m->n, T, m->y16, 0)) return -1;
         dbg16(dbg, dbg_ctx, bi, "fc2_w", m->y16, (size_t)T * D);
-        for (size_t i = 0; i < (size_t)T * D; i++)
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)T * D; i++)
             m->x[i] += (float)((double)m->y16[i] * B->s_fc2);
     }
 
