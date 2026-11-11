@@ -1,0 +1,60 @@
+#ifndef FPGATE_ACCEL_DRV_H
+#define FPGATE_ACCEL_DRV_H
+/*
+ * Access to the accelerator from Linux on the HPS: register file through the lightweight bridge
+ * (/dev/mem, 0xFF200000) and the reserved DDR3 region (0x30000000, uncached through /dev/mem).
+ * Same register sequence as accel/tools/board/accel_test.c, which validated it on the board.
+ *
+ * Preconditions (accel/tools/board/README.md): the FPGA is configured by U-Boot (MSEL = 01010,
+ * soc_system.rbf on the SD) and the region is outside Linux RAM. Reading the registers with the
+ * FPGA unconfigured hangs the board, so accel_hw_open() refuses to touch them unless
+ * /sys/class/fpga_manager/fpga0/state says "operating".
+ */
+#include <stddef.h>
+#include <stdint.h>
+
+#define ACCEL_REGION_PHYS 0x30000000u
+
+typedef struct accel_hw {
+    int fd;
+    volatile uint8_t *csr;
+    uint8_t *region;
+    size_t region_len;
+    double mhz;                 /* accelerator clock measured with HEARTBEAT at open */
+    int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
+} accel_hw_t;
+
+typedef struct {
+    uint32_t M, N, K;
+    int in_bits, out_bits, spp;
+    uint32_t a_phys, w_phys, out_phys;
+    int in_unsigned;            /* 16-bit input is UQ (attention probabilities); default: signed */
+    int raw32;                  /* output the INT32 accumulators unchanged (attention scores) */
+    uint32_t stride_out;        /* bytes between output rows; 0 = N * element size */
+} accel_op_t;
+
+typedef struct {
+    uint64_t cycles;
+    uint32_t bytes_rd, bytes_wr;
+    double wall_s;
+} accel_stat_t;
+
+/* returns 0 on success; messages go to stderr */
+int accel_hw_open(accel_hw_t *h, size_t region_len);
+void accel_hw_close(accel_hw_t *h);
+
+typedef struct {
+    uint32_t rows, cols, kp;
+    uint32_t s_phys, s_stride, p_phys;
+    uint32_t m0;
+    int sh;
+} accel_sm_op_t;
+
+/* softmax unit: scores (RAW32 output of the engine) -> probabilities in the activation format. 0 on DONE. */
+int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
+
+/* runs one operation and waits for it. Returns 0 on DONE, -1 on error or timeout (the engine is
+ * reset so the next operation starts clean). */
+int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s);
+
+#endif
