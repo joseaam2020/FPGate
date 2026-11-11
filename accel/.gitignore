@@ -1,0 +1,45 @@
+sim_work/
+transcript
+vsim.wlf
+db/
+incremental_db/
+output_files/
+*.qws
+quartus_hps/db/
+quartus_hps/incremental_db/
+quartus_hps/output_files/
+quartus_hps/soc_system/synthesis/
+quartus_hps/soc_system/simulation/
+quartus_hps/hps_isw_handoff/
+quartus_hps/greybox_tmp/
+quartus_hps/*.sopcinfo
+quartus_hps/soc_system.sopcinfo
+tools/board/csr_test
+tools/board/accel_test
+board_pkg.tar
+
+# simulation work libraries and scratch builds
+sim_work_cycles/
+sim_work_tb/
+sim_work_dbg/
+preloader_build/
+preloader_backup.bin
+*.bak
+
+# FPGA bitstreams: keep only the reference ones (h0, h4, h5 at 120 MHz); build intermediates stay local
+*.sof
+!quartus_hps/h0_DE10_Standard_GHRD.sof
+!quartus_hps/h4_DE10_Standard_GHRD.sof
+!quartus_hps/h5_120MHz_DE10_Standard_GHRD.sof
+quartus_hps/h5_120MHz_seed*
+quartus_hps/soc_system_h4_backup.qsys
+rbf_out/soc_system.rbf
+rbf_out/h5_120MHz_seed2/
+rbf_out/fpga_min.dtbo
+
+# test data that fpgate-accel --dump-attn regenerates (4 MB of scores and 2 MB of probabilities per head)
+vectors/attn_*/s.bin
+vectors/attn_*/p.bin
+
+# board test binaries
+tools/board/hps_bench
