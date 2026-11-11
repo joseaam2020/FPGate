@@ -1,30 +1,86 @@
 #include "ops.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+/* horizontal sum of an int32x4 (ARMv7 has no vaddvq_s32) */
+static inline int32_t vaddvq_s32_compat(int32x4_t v)
+{
+    int32x2_t s = vadd_s32(vget_low_s32(v), vget_high_s32(v));
+    return vget_lane_s32(vpadd_s32(s, s), 0);
+}
+#endif
 
 void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
 {
     const float sc = (float)scale;
+    const float inv = 1.0f / sc;
     const int qm = qmax_of(bits);
-    if (bits == 8) {
-        int8_t *o = q;
-        for (size_t i = 0; i < n; i++) {
-            int v = (int)rintf(x[i] / sc);
-            o[i] = (int8_t)(v > qm ? qm : v < -qm ? -qm : v);
-        }
-    } else {
-        int16_t *o = q;
-        for (size_t i = 0; i < n; i++) {
-            int v = (int)rintf(x[i] / sc);
-            o[i] = (int16_t)(v > qm ? qm : v < -qm ? -qm : v);
-        }
+    /* Exact replacement for rintf(x / sc): the product x * inv differs from the quotient by a few
+     * ulp, which can only change the rounded value when the quotient is within that error of a
+     * half-integer. Those (rare) elements are recomputed with the real division. Values with
+     * |q| >= 2^22 are clamped anyway (qm <= 32767), so the magic-number rounding is valid. */
+    const float magic = 12582912.0f; /* 1.5 * 2^23 */
+    const ptrdiff_t nn = (ptrdiff_t)n;
+#pragma omp parallel for schedule(static) if (n > 4096)
+    for (ptrdiff_t i = 0; i < nn; i++) {
+        const float t = x[i] * inv;
+        float r = (t + magic) - magic;
+        const float f = fabsf(t - truncf(t));
+        if (fabsf(f - 0.5f) < 1e-5f * fabsf(t) + 1e-6f)
+            r = rintf(x[i] / sc);
+        int v = (int)r;
+        v = v > qm ? qm : v < -qm ? -qm : v;
+        if (bits == 8)
+            ((int8_t *)q)[i] = (int8_t)v;
+        else
+            ((int16_t *)q)[i] = (int16_t)v;
     }
 }
 
 void gemm_s8(const int8_t *A, const int8_t *W, int32_t *C, int M, int N, int K)
 {
+#ifdef __ARM_NEON
+    /* 1 row x 4 columns per step: each 8-byte load of the row feeds four dot products
+     * (vmull_s8 -> int16 products, vpadalq_s16 -> int32 accumulators). Integer, so exact. */
+    const int K8 = K & ~7;
+#pragma omp parallel for schedule(static)
+    for (int i = 0; i < M; i++) {
+        const int8_t *a = A + (size_t)i * K;
+        int32_t *c = C + (size_t)i * N;
+        int j = 0;
+        for (; j + 4 <= N; j += 4) {
+            const int8_t *w0 = W + (size_t)j * K, *w1 = w0 + K, *w2 = w1 + K, *w3 = w2 + K;
+            int32x4_t s0 = vdupq_n_s32(0), s1 = s0, s2 = s0, s3 = s0;
+            int k = 0;
+            for (; k < K8; k += 8) {
+                const int8x8_t av = vld1_s8(a + k);
+                s0 = vpadalq_s16(s0, vmull_s8(av, vld1_s8(w0 + k)));
+                s1 = vpadalq_s16(s1, vmull_s8(av, vld1_s8(w1 + k)));
+                s2 = vpadalq_s16(s2, vmull_s8(av, vld1_s8(w2 + k)));
+                s3 = vpadalq_s16(s3, vmull_s8(av, vld1_s8(w3 + k)));
+            }
+            int32_t t0 = vaddvq_s32_compat(s0), t1 = vaddvq_s32_compat(s1);
+            int32_t t2 = vaddvq_s32_compat(s2), t3 = vaddvq_s32_compat(s3);
+            for (; k < K; k++) {
+                const int32_t av = a[k];
+                t0 += av * w0[k]; t1 += av * w1[k]; t2 += av * w2[k]; t3 += av * w3[k];
+            }
+            c[j] = t0; c[j + 1] = t1; c[j + 2] = t2; c[j + 3] = t3;
+        }
+        for (; j < N; j++) {
+            const int8_t *w = W + (size_t)j * K;
+            int32_t s = 0;
+            for (int k = 0; k < K; k++)
+                s += (int32_t)a[k] * (int32_t)w[k];
+            c[j] = s;
+        }
+    }
+#else
 #pragma omp parallel for schedule(static)
     for (int i = 0; i < M; i++) {
         const int8_t *a = A + (size_t)i * K;
@@ -37,6 +93,7 @@ void gemm_s8(const int8_t *A, const int8_t *W, int32_t *C, int M, int N, int K)
             c[j] = s;
         }
     }
+#endif
 }
 
 void gemm_s16(const int16_t *A, const int8_t *W, int32_t *C, int M, int N, int K)
@@ -77,21 +134,33 @@ void layer_norm(const float *x, int rows, int d, const float *g, const float *b,
     for (int r = 0; r < rows; r++) {
         const float *xr = x + (size_t)r * d;
         float *yr = y + (size_t)r * d;
-        double s = 0.0;
-        for (int j = 0; j < d; j++)
-            s += xr[j];
-        const float mu = (float)(s / d);
-        double v = 0.0;
-        for (int j = 0; j < d; j++) {
-            float e = xr[j] - mu;
-            v += (double)(e * e);
+        /* four independent double accumulators break the add-latency chain (the VFP double add
+         * has a latency of several cycles on the Cortex-A9). Sums of float values in double are
+         * exact for the ranges seen here, so the result does not depend on the order. */
+        double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+        int j = 0;
+        for (; j + 4 <= d; j += 4) {
+            s0 += xr[j]; s1 += xr[j + 1]; s2 += xr[j + 2]; s3 += xr[j + 3];
         }
-        const float var = (float)(v / d);
+        for (; j < d; j++)
+            s0 += xr[j];
+        const float mu = (float)(((s0 + s1) + (s2 + s3)) / d);
+        double v0 = 0.0, v1 = 0.0, v2 = 0.0, v3 = 0.0;
+        j = 0;
+        for (; j + 4 <= d; j += 4) {
+            const float e0 = xr[j] - mu, e1 = xr[j + 1] - mu, e2 = xr[j + 2] - mu, e3 = xr[j + 3] - mu;
+            v0 += (double)(e0 * e0); v1 += (double)(e1 * e1); v2 += (double)(e2 * e2); v3 += (double)(e3 * e3);
+        }
+        for (; j < d; j++) {
+            const float e = xr[j] - mu;
+            v0 += (double)(e * e);
+        }
+        const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
         const float den = sqrtf(var + epsf);
-        for (int j = 0; j < d; j++) {
-            float t = (xr[j] - mu) / den;
-            t = t * g[j];
-            yr[j] = t + b[j];
+        for (int k = 0; k < d; k++) {
+            float t = (xr[k] - mu) / den;
+            t = t * g[k];
+            yr[k] = t + b[k];
         }
     }
 }
