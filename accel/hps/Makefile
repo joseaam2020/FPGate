@@ -45,7 +45,14 @@ test-sim: build/native/fpgate-accel
 	sh tests/test_sim.sh build/native/fpgate-accel $(PKG) pkg/e1_r7.idx 2
 PKG      ?= /repo/model/quant/release/e1_r7
 
+# End to end on a PC: the real proxy (built with `make native` in ../../proxy) and the real fpgate-accel; real
+# model inputs rebuilt from the reference tensors. CPU backend, then the software engine with and without the
+# pipeline (the proxy's default timeout is raised inside the script: the software engine is slow on a PC).
+PROXYBIN ?= /repo/proxy/build/native/fpgate-proxy
+test-proxy: build/native/fpgate-accel
+	set -e; for o in "" "--sim" "--sim --no-pipeline"; do 	  echo "== proxy + fpgate-accel $$o"; 	  bash tests/test_proxy.sh $(PROXYBIN) build/native/fpgate-accel $(PKG) pkg/e1_r7.idx $(PKG)/vectors 6 $$o; 	done
+
 clean:
 	rm -rf build
 
-.PHONY: native arm test-kernels test-sim clean
+.PHONY: native arm test-kernels test-sim test-proxy clean
