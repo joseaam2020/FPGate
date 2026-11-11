@@ -22,6 +22,8 @@ typedef struct accel_hw {
     size_t region_len;
     double mhz;                 /* accelerator clock measured with HEARTBEAT at open */
     int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
+    struct accel_sim *sim;      /* software engine (accel_hw_open_sim); NULL on the real hardware */
+    double t_start;             /* wall time of the last accel_hw_start */
 } accel_hw_t;
 
 typedef struct {
@@ -53,8 +55,26 @@ typedef struct {
 /* softmax unit: scores (RAW32 output of the engine) -> probabilities in the activation format. 0 on DONE. */
 int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
 
-/* runs one operation and waits for it. Returns 0 on DONE, -1 on error or timeout (the engine is
- * reset so the next operation starts clean). */
+/* Software model of the linear engine, for testing on a PC (no FPGA, no /dev/mem): the region is
+ * ordinary memory and an operation runs on a worker thread that decodes the same packed formats and
+ * writes the output progressively after a delay proportional to its size, so ordering mistakes
+ * (reading or overwriting a buffer the "engine" is still using) show up as wrong results.
+ * Supports the linear operations only (no RAW32, no softmax unit). */
+int accel_hw_open_sim(accel_hw_t *h, size_t region_len);
+
+/* Starts one operation without waiting: the engine works while the caller does something else.
+ * Exactly one operation may be in flight; accel_hw_wait must be called before the next start. */
+int accel_hw_start(accel_hw_t *h, const accel_op_t *op);
+/* Waits for the operation started with accel_hw_start (op = the same descriptor). Returns 0 on DONE,
+ * -1 on error or timeout (the engine is reset so the next operation starts clean). */
+int accel_hw_wait(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s);
+
+/* internal: software engine (accel_sim.c) */
+int accel_sim_start(accel_hw_t *h, const accel_op_t *op);
+int accel_sim_wait(accel_hw_t *h, accel_stat_t *st);
+void accel_sim_free(accel_hw_t *h);
+
+/* start + wait */
 int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s);
 
 #endif

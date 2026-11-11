@@ -30,8 +30,10 @@
 
 static struct {
     int fpga, fpga_attn, check, verbose, blocks;
+    int sim;                    /* software engine instead of the FPGA (tests on a PC) */
+    int chunk;                  /* rows per engine operation, -1 = model default, 0 = no overlap */
     accel_hw_t hw;
-} g_opt;
+} g_opt = {.chunk = -1};
 
 #define FPGA_REGION_MAP 0x6000000u      /* 96 MiB, see model.c */
 
@@ -41,19 +43,33 @@ static int setup_backend(model_t *model)
     model_limit_blocks(model, g_opt.blocks);
     if (!g_opt.fpga)
         return 0;
-    if (accel_hw_open(&g_opt.hw, FPGA_REGION_MAP) != 0)
+    if (g_opt.sim) {
+        if (g_opt.fpga_attn) {
+            fprintf(stderr, "--sim simulates the linear engine only; it cannot be combined with --fpga-attn\n");
+            return -1;
+        }
+        if (accel_hw_open_sim(&g_opt.hw, FPGA_REGION_MAP) != 0)
+            return -1;
+    } else if (accel_hw_open(&g_opt.hw, FPGA_REGION_MAP) != 0)
         return -1;
-    return model_attach_fpga(model, &g_opt.hw, g_opt.check, g_opt.verbose, g_opt.fpga_attn);
+    if (model_attach_fpga(model, &g_opt.hw, g_opt.check, g_opt.verbose, g_opt.fpga_attn) != 0)
+        return -1;
+    if (g_opt.chunk >= 0)
+        model_set_chunk(model, g_opt.chunk);
+    return 0;
 }
 
 static void print_stats(const model_t *model, double total)
 {
     const model_stats_t *s = model_stats(model);
-    const double fpga_hps = s->t_pack + s->t_run + s->t_read;
+    /* with overlap the three parts run at the same time, so the real cost is the wall time of the layers */
+    const double fpga_hps = s->t_lin_wall > 0 ? s->t_lin_wall : s->t_pack + s->t_run + s->t_read;
     const double listed = s->t_patch + s->t_ln + s->t_rope + s->t_attn + s->t_swiglu + s->t_quant;
     if (g_opt.fpga)
-        printf("    FPGA: %d operations, %llu cycles (%.3f s at %.0f MHz); HPS: pack %.3f s, wait %.3f s, read %.3f s%s\n",
+        printf("    FPGA: %d operations, %llu cycles (%.3f s at %.0f MHz); HPS: pack %.3f s, wait %.3f s, read %.3f s "
+               "(layers wall %.3f s)%s\n",
                s->ops, s->cycles, s->cycles / (g_opt.hw.mhz * 1e6), g_opt.hw.mhz, s->t_pack, s->t_run, s->t_read,
+               fpga_hps,
                g_opt.check ? (s->mismatches ? "  -- OUTPUTS DIFFER FROM THE CPU" : "  -- every output identical to the CPU") : "");
     if (g_opt.fpga_attn)
         printf("    attention on the FPGA: %llu + %llu + %llu cycles (scores, softmax, context; %.3f s at %.0f MHz); HPS: pack Q/K/V %.3f s, "
@@ -563,6 +579,12 @@ int main(int argc, char **argv)
             g_opt.fpga = 1;
         else if (!strcmp(argv[i], "--fpga-attn"))
             g_opt.fpga = g_opt.fpga_attn = 1;
+        else if (!strcmp(argv[i], "--sim"))
+            g_opt.fpga = g_opt.sim = 1;
+        else if (!strcmp(argv[i], "--no-overlap"))
+            g_opt.chunk = 0;
+        else if (!strcmp(argv[i], "--chunk") && i + 1 < argc)
+            g_opt.chunk = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--check"))
             g_opt.check = 1;
         else if (!strcmp(argv[i], "--verbose"))

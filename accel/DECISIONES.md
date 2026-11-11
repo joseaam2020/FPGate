@@ -378,3 +378,17 @@ Objetivo: bajar de los 10 s del proxy el tiempo de la imagen (14.2 s medidos, �
 ### Punto de retorno antes del solapamiento ARM/FPGA
 
 El siguiente paso (solapar el trabajo del ARM con el de la FPGA, con hilos y sincronización) es el más delicado. **La etiqueta git `accel-pre-solape` marca el último commit sin solapamiento.** Si el solapamiento falla en la placa (cuelgues, resultados distintos o más lento), se vuelve con `git checkout accel-pre-solape -- accel/hps` (o `git reset --hard accel-pre-solape` si se quiere descartar todo lo posterior; no hay cambios de FPGA en juego, el bitstream es el mismo). Regla del solapamiento: debe poder desactivarse con una opción de línea de comandos (`--no-overlap`) y el resultado con y sin él debe ser idéntico bit a bit.
+
+## Solapamiento ARM/FPGA, paso 1: capas lineales por trozos (2026-11-11, `accel/hps`)
+
+Empieza después de la etiqueta `accel-pre-solape`. Se vuelve a la versión sin solapamiento con `git checkout accel-pre-solape -- accel/hps`, o sin tocar git con `--no-overlap` (usa el mismo código secuencial de antes, `linear_fpga_seq`).
+
+**Qué hace.** Cada capa lineal se parte en trozos de 256 filas (un panel completo del motor: 16 subtiles de 16 filas con entrada de 8 bits). Con el motor calculando el trozo *c*, el ARM empaqueta la entrada del trozo *c+1* y lee la salida del trozo *c−1*. Los trozos usan zonas distintas de los buffers de entrada y salida, así que no hay conflicto; solo hay una operación del motor a la vez. Los pesos se leen una vez por trozo, igual que antes por panel, así que los ciclos del motor casi no cambian (más un pequeño costo fijo por operación).
+
+**Cambios.** `accel_drv`: `accel_hw_run` se divide en `accel_hw_start` y `accel_hw_wait` (la secuencia de registros es la misma de antes). `model.c`: `linear_fpga_chunked`, `pack_chunk`, `read_chunk`; la ruta secuencial queda intacta. Opciones: `--no-overlap`, `--chunk N` (múltiplo de 16; por defecto 256).
+
+**Prueba sin placa: motor simulado (`--sim`, `src/accel_sim.c`).** Decodifica los mismos formatos empaquetados, calcula con los kernels de CPU y escribe la salida por rebanadas desde un hilo aparte, con retardo, sobre memoria normal. Sirve para comprobar la lógica de orden, no los tiempos (el hilo del "motor" compite por CPU con el ARM). Resultado: con trozos de 256, 64, 1000 y sin solapamiento, **todas las capas idénticas al backend de CPU** (`make test-sim`), también con el binario ARM bajo qemu. Control negativo: con un fallo introducido a propósito (leer un trozo mientras el motor lo escribe) el simulador marca ≈ 524 000 de 524 800 salidas distintas, es decir, detecta errores de orden. No cubre la atención ni el softmax (no se simulan): esa parte no cambió.
+
+**Lo que no se sabe hasta probar en la placa:** el tiempo real. Posible freno: el ARM y la FPGA comparten la DDR3 y la región es no cacheable, así que empaquetar y leer a la vez que el motor lee y escribe puede hacer lento a cualquiera de los dos. Hay que mirar `FPGA: ... layers wall` frente a la suma de pack + wait + read.
+
+**Siguiente idea (no hecha):** casi todo entre dos atenciones es por filas (LayerNorm, cuantizar, GEMM, RoPE, SwiGLU, sumas), así que se podría hacer una tubería por trozos de filas entre capas para que el ARM y la FPGA trabajen a la vez también en esas etapas. Es una reestructuración mayor; se decide con los tiempos medidos.

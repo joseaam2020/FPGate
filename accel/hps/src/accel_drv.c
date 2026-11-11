@@ -3,6 +3,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -127,6 +128,13 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
 
 void accel_hw_close(accel_hw_t *h)
 {
+    if (h->sim) {
+        accel_sim_free(h);
+        free(h->region);
+        memset(h, 0, sizeof *h);
+        h->fd = -1;
+        return;
+    }
     if (h->region)
         munmap(h->region, h->region_len);
     if (h->csr)
@@ -137,8 +145,10 @@ void accel_hw_close(accel_hw_t *h)
     h->fd = -1;
 }
 
-int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s)
+int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
 {
+    if (h->sim)
+        return accel_sim_start(h, op);
     const int out16 = op->out_bits > 8 && !op->raw32;
     const uint32_t elem = op->raw32 ? 4u : (out16 ? 2u : 1u);
     wr(h, R_CTRL, CTRL_RESET_SOFT);          /* clean state, clears the counters */
@@ -152,8 +162,16 @@ int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double t
     wr(h, R_OP, ((uint32_t)op->spp << 8) | ((uint32_t)op->raw32 << 3) | ((uint32_t)out16 << 2) |
                     ((uint32_t)(!op->in_unsigned) << 1) | (op->in_bits > 8));
     __sync_synchronize();
-    const double t0 = now_s();
+    h->t_start = now_s();
     wr(h, R_CTRL, CTRL_START);
+    return 0;
+}
+
+int accel_hw_wait(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s)
+{
+    if (h->sim)
+        return accel_sim_wait(h, st);
+    const double t0 = h->t_start;
     uint32_t s;
     do {
         s = rd(h, R_STATUS);
@@ -176,6 +194,13 @@ int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double t
         return -1;
     }
     return 0;
+}
+
+int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s)
+{
+    if (accel_hw_start(h, op) != 0)
+        return -1;
+    return accel_hw_wait(h, op, st, timeout_s);
 }
 
 int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s)

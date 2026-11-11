@@ -63,6 +63,7 @@ struct model {
     uint8_t *rdbuf;                     /* copy of the output matrix read back from the region */
     int16_t *chk16;                     /* CPU result used by --check */
     int a_ok, a_rows, a_k, a_bits;      /* activations currently packed in the region */
+    int chunk_rows;                     /* rows per engine operation when overlapping ARM and FPGA; 0 = sequential */
     model_stats_t st;
 };
 
@@ -130,8 +131,9 @@ static void linear_cpu(model_t *m, const layer_t *L, int rows, int16_t *out)
     epilogue_int(m->acc, rows, L->out, L->bias, L->m0, L->shift, L->out_bits, out);
 }
 
-/* the same operation on the FPGA: pack the input, run, read the output matrix back */
-static int linear_fpga(model_t *m, const layer_t *L, int rows, int16_t *out)
+/* the same operation on the FPGA: pack the input, run, read the output matrix back
+ * (sequential: the ARM waits for the engine; this is the --no-overlap behaviour) */
+static int linear_fpga_seq(model_t *m, const layer_t *L, int rows, int16_t *out)
 {
     const int K = L->in, N = L->out, planes = L->in_bits > 8 ? 2 : 1;
     const int out16 = L->out_bits > 8;
@@ -184,6 +186,135 @@ static int linear_fpga(model_t *m, const layer_t *L, int rows, int16_t *out)
     if (m->check && bad)
         fprintf(stderr, "  *** %s: %zu of %zu outputs differ from the CPU result\n", L->name, bad, n);
     return 0;
+}
+
+/* ---- overlapped version: the layer is cut into chunks of rows (whole engine panels) ----
+ * While the engine works on chunk c, the ARM packs the input of chunk c+1 and reads back the
+ * output of chunk c-1. Chunks touch disjoint parts of the activation and output buffers, so there
+ * is no hazard; only one engine operation is in flight at a time. */
+
+/* pack rows [row0, row0 + nrows) of the quantised input into the activation buffer of the region */
+static void pack_chunk(model_t *m, const layer_t *L, int row0, int nrows)
+{
+    const int K = L->in, planes = L->in_bits > 8 ? 2 : 1;
+    const size_t off = (size_t)(row0 / 16) * planes * (size_t)K * 16;      /* row0 is a multiple of 16 */
+    const size_t bytes = fpga_acts_bytes(nrows, K, planes);
+    if (planes == 1)
+        fpga_pack_acts8(m->a8 + (size_t)row0 * K, nrows, K, m->stage + off);
+    else
+        fpga_pack_acts16(m->a16 + (size_t)row0 * K, nrows, K, m->stage + off);
+    memcpy(m->hw->region + FPGA_A_OFF + off, m->stage + off, bytes);
+}
+
+/* read rows [row0, row0 + nrows) of the output matrix into out (int16 container) */
+static void read_chunk(model_t *m, const layer_t *L, int row0, int nrows, int16_t *out)
+{
+    const int N = L->out, out16 = L->out_bits > 8;
+    const size_t esz = out16 ? 2 : 1, n = (size_t)nrows * N;
+    const uint8_t *src = m->hw->region + FPGA_O_OFF + (size_t)row0 * N * esz;
+    uint8_t *tmp = m->rdbuf + (size_t)row0 * N * esz;
+    memcpy(tmp, src, n * esz);
+    if (out16)
+        memcpy(out + (size_t)row0 * N, tmp, n * 2);
+    else {
+        int16_t *o = out + (size_t)row0 * N;
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t i = 0; i < (ptrdiff_t)n; i++)
+            o[i] = ((const int8_t *)tmp)[i];
+    }
+}
+
+static int linear_fpga_chunked(model_t *m, const layer_t *L, int rows, int16_t *out)
+{
+    const int K = L->in, N = L->out, planes = L->in_bits > 8 ? 2 : 1;
+    const int out16 = L->out_bits > 8;
+    const size_t esz = out16 ? 2 : 1;
+    int chunk = m->chunk_rows;
+    if (chunk > rows)
+        chunk = rows;
+    const int nch = (rows + chunk - 1) / chunk;
+    const int need_pack = !(m->a_ok && m->a_rows == rows && m->a_k == K && m->a_bits == L->in_bits);
+    double t_pack = 0, t_read = 0, t_wait = 0;
+    unsigned long long cycles = 0;
+    const double w0 = now_s();
+
+    if (need_pack) {
+        const double t = now_s();
+        pack_chunk(m, L, 0, chunk < rows ? chunk : rows);
+        t_pack += now_s() - t;
+    }
+    for (int c = 0; c < nch; c++) {
+        const int row0 = c * chunk, nr = rows - row0 < chunk ? rows - row0 : chunk;
+        accel_op_t op = {.M = (uint32_t)nr, .N = (uint32_t)N, .K = (uint32_t)K, .in_bits = L->in_bits,
+                         .out_bits = L->out_bits, .spp = planes == 2 ? 4 : 16,
+                         .a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF +
+                                   (uint32_t)((size_t)(row0 / 16) * planes * (size_t)K * 16),
+                         .w_phys = ACCEL_REGION_PHYS + m->w_off[L - m->p->layers],
+                         .out_phys = ACCEL_REGION_PHYS + FPGA_O_OFF + (uint32_t)((size_t)row0 * N * esz)};
+        double t = now_s();
+        if (accel_hw_start(m->hw, &op) != 0) {
+            m->a_ok = 0;
+            return -1;
+        }
+        t_wait += now_s() - t;
+        /* the engine is busy: do the ARM work that does not depend on this chunk's result */
+        if (need_pack && c + 1 < nch) {
+            t = now_s();
+            const int n0 = (c + 1) * chunk;
+            pack_chunk(m, L, n0, rows - n0 < chunk ? rows - n0 : chunk);
+            t_pack += now_s() - t;
+        }
+        if (c > 0) {
+            t = now_s();
+            read_chunk(m, L, (c - 1) * chunk, chunk, out);
+            t_read += now_s() - t;
+        }
+        accel_stat_t st;
+        t = now_s();
+        if (accel_hw_wait(m->hw, &op, &st, 60.0) != 0) {
+            m->a_ok = 0;
+            return -1;
+        }
+        t_wait += now_s() - t;
+        cycles += st.cycles;
+    }
+    {
+        const double t = now_s();
+        const int last = (nch - 1) * chunk;
+        read_chunk(m, L, last, rows - last, out);
+        t_read += now_s() - t;
+    }
+    m->a_ok = 1; m->a_rows = rows; m->a_k = K; m->a_bits = L->in_bits;
+
+    const size_t n = (size_t)rows * N;
+    m->st.ops += nch;
+    m->st.cycles += cycles;
+    m->st.t_pack += t_pack;
+    m->st.t_run += t_wait;
+    m->st.t_read += t_read;
+    m->st.t_lin_wall += now_s() - w0;
+    size_t bad = 0;
+    if (m->check) {
+        linear_cpu(m, L, rows, m->chk16);
+        for (size_t i = 0; i < n; i++)
+            bad += m->chk16[i] != out[i];
+        m->st.mismatches += bad;
+    }
+    if (m->verbose)
+        fprintf(stderr, "  fpga %-10s M=%d N=%-4d K=%-4d: %d chunks, %9llu cycles, pack %.1f ms, wait %.1f ms, "
+                        "read %.1f ms, wall %.1f ms%s\n", L->name, rows, N, K, nch, cycles, t_pack * 1e3, t_wait * 1e3,
+                t_read * 1e3, (now_s() - w0) * 1e3, m->check ? (bad ? "  MISMATCH" : "  identical to CPU") : "");
+    if (m->check && bad)
+        fprintf(stderr, "  *** %s: %zu of %zu outputs differ from the CPU result\n", L->name, bad, n);
+    return 0;
+}
+
+static int linear_fpga(model_t *m, const layer_t *L, int rows, int16_t *out)
+{
+    /* the chunk size is a whole number of engine panels (16 subtiles of 16 rows for 8-bit inputs) */
+    if (m->chunk_rows <= 0 || rows <= m->chunk_rows)
+        return linear_fpga_seq(m, L, rows, out);
+    return linear_fpga_chunked(m, L, rows, out);
 }
 
 /* quantise the float input, run the INT GEMM and the epilogue; result in int16 container.
@@ -522,6 +653,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     m->check = check;
     m->verbose = verbose;
     m->a_ok = 0;
+    m->chunk_rows = 256;
     if (fpga_attn) {
         if (!hw->has_softmax) {
             fprintf(stderr, "model: --fpga-attn needs a bitstream with the softmax unit (registers at 0x100)\n");
@@ -544,6 +676,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
 }
 
 void model_limit_blocks(model_t *m, int n) { m->max_blocks = n; }
+void model_set_chunk(model_t *m, int rows) { m->chunk_rows = rows <= 0 ? 0 : (rows + 15) & ~15; }
 const model_stats_t *model_stats(const model_t *m) { return &m->st; }
 void model_stats_reset(model_t *m) { memset(&m->st, 0, sizeof m->st); }
 

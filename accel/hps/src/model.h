@@ -19,6 +19,7 @@ typedef struct {
     int ops;                    /* operations run on the FPGA */
     unsigned long long cycles;  /* sum of the engine's CYCLES counters */
     double t_pack, t_run, t_read;   /* HPS time packing inputs, waiting for the engine, reading outputs */
+    double t_lin_wall;              /* wall time of the overlapped linear layers (pack + wait + read overlap) */
     unsigned long long mismatches;  /* outputs that differ from the CPU result (check mode) */
     /* HPS time by stage, seconds (CPU work that stays on the ARM) */
     double t_patch, t_ln, t_rope, t_attn, t_swiglu, t_quant;
@@ -36,6 +37,9 @@ struct accel_hw;
  * every INT GEMM that the engine supports to it. check: also compute each layer on the CPU and count
  * differences. Returns 0 on success. patch_embed and the head stay on the CPU. */
 int model_attach_fpga(model_t *m, struct accel_hw *hw, int check, int verbose, int fpga_attn);
+/* rows per engine operation for the overlapped linear layers (rounded up to a multiple of 16);
+ * 0 = no overlap: the ARM waits for every operation (the behaviour before overlapping). Default 256. */
+void model_set_chunk(model_t *m, int rows);
 /* run only the first n blocks (tests); 0 = all */
 void model_limit_blocks(model_t *m, int n);
 const model_stats_t *model_stats(const model_t *m);
