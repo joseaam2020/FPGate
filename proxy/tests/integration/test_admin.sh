@@ -63,7 +63,7 @@ puerto = 8080
 umbral = 0.60   # strict-ish
 timeout_accel_ms = 10000
 EOF
-$BIN -p 18090 $CA --accel "$T/m.sock" --block-log "$T/blocks.db" --config "$T/fpgate.toml" \
+$BIN -p 18090 $CA --accel "$T/m.sock" --verdict-cache 0 --block-log "$T/blocks.db" --config "$T/fpgate.toml" \
     --admin-credentials "$T/admin.pass" --admin-port 18443 2>"$T/p.log" & P=$!
 PIDS="$PIDS $P"
 sleep 2.5

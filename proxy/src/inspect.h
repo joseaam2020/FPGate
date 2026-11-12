@@ -38,6 +38,8 @@ typedef struct {
     inspect_policy_t on_failure;    /* accelerator down, slow, erroring, or everything queued */
     inspect_policy_t on_unexamined; /* decodes fine but cannot be judged: GIF, AVIF, too many pixels */
     inspect_policy_t on_corrupt;    /* damaged or truncated image */
+    unsigned verdict_cache_entries; /* scores remembered by image hash; 0 = off */
+    int min_judge_px;               /* images with a side below this pass unjudged; 0 = off */
 } inspect_cfg_t;
 
 typedef struct {
@@ -47,6 +49,7 @@ typedef struct {
     unsigned long skipped_oversize, skipped_budget, skipped_encoded, skipped_partial, skipped_busy;
     unsigned long accept_rewritten;   /* requests whose Accept lost its image/avif entry */
     unsigned long allowed, blocked;
+    unsigned long cache_hits, cache_misses;   /* verdict cache lookups */
     unsigned long blocked_nsfw, blocked_failure, blocked_corrupt, blocked_unexamined;
     double prep_ms_total, prep_ms_max;
 } inspect_stats_t;

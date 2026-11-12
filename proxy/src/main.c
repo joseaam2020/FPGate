@@ -94,6 +94,8 @@ static void usage(const char *prog)
             "Judging images (needs fpgate-accel; without --accel images are only analysed):\n"
             "  --accel PATH          Unix socket of fpgate-accel; images it rates NSFW are replaced\n"
             "  --threshold X         score >= X is replaced (default 0.50)\n"
+            "  --verdict-cache N     scores remembered by image hash (default 4096, 0 = off)\n"
+            "  --min-judge-px N      images with a side below N px pass unjudged (default 0 = off)\n"
             "  --accel-timeout-ms N  limit per image once sent to the accelerator (default 10000)\n"
             "  --queue-max N         images allowed to wait for the accelerator (default 8)\n"
             "  --on-failure P        accelerator down, slow or erroring: block (default) or allow\n"
@@ -172,6 +174,10 @@ int main(int argc, char **argv)
             icfg.classify = 1;
         } else if (strcmp(argv[i], "--threshold") == 0 && i + 1 < argc) {
             icfg.threshold = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--verdict-cache") == 0 && i + 1 < argc) {
+            icfg.verdict_cache_entries = (unsigned)atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--min-judge-px") == 0 && i + 1 < argc) {
+            icfg.min_judge_px = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--accel-timeout-ms") == 0 && i + 1 < argc) {
             acfg.timeout_ms = (unsigned)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--queue-max") == 0 && i + 1 < argc) {
