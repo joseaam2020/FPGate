@@ -443,3 +443,25 @@ Detalle de la tubería: motor 2.62 s (314 M ciclos), ARM ocupado 4.47 s (LayerNo
 - Cuantizar tarda 1.18 s, ≈ 26 ns por elemento: es la parte más lenta para lo que hace. `truncf` es una llamada de biblioteca en ARMv7 y el bucle no usa NEON. Con NEON podría bajar a ≈ 0.3 s.
 - Leer y empaquetar (1.5 s en total) están limitados por el ancho de banda de la región no cacheable.
 - La atención (2.2 s) corre sola: durante ella el ARM está parado. Hacer la atención por trozos de filas de consulta (todas las cabezas por trozo) permitiría que la tubería arranque con el trozo 0 mientras el motor sigue con el 1; el total se acercaría a max(FPGA ≈ 4.5 s, ARM ≈ 5 s) en lugar de la suma. Es un cambio grande.
+
+## Primer extremo a extremo en la placa: proxy real + fpgate-accel real + FPGA (2026-11-11)
+
+**20 imágenes de referencia en la placa** (`--selftest 20 --fpga --fpga-attn`, tubería por defecto): 20/20 decisiones idénticas a la referencia, peor diferencia de logit 0.07451 (la misma que el backend de CPU), 7.5 a 7.7 s por imagen.
+
+**Proxy real contra el acelerador real** (`fpgate-accel /run/fpgate-accel.sock --pkg pkg --index e1_r7.idx --fpga --fpga-attn`; `fpgate-proxy -p 8080 --accel /run/fpgate-accel.sock --accel-timeout-ms 20000`, solo HTTP, sin CA ni panel). Imágenes servidas por `busybox httpd` desde la placa, pedidas desde la PC con `curl -x`:
+
+| Imagen | Score del proxy | Referencia | Veredicto | Acelerador | Total proxy |
+|---|---|---|---|---|---|
+| `img_00` (NSFW) | 1.000 | 1.00000 | block | 7605 ms | 7693 ms |
+| `img_04` (SFW) | 0.013 | 0.01274 | allow | 7569 ms | 7649 ms |
+| `img_07` (NSFW, cerca del umbral) | 0.589 | 0.58090 | block | 7569 ms | 7653 ms |
+| `img_10` (SFW) | 0.301 | 0.30013 | allow | 7584 ms | 7666 ms |
+| `photo1280.jpg` (1280×575 JPEG) | 0.000 | – | allow | 7578 ms | 7706 ms |
+
+Decodificar y remuestrear en el proxy cuesta 75 a 125 ms. **El sistema completo funciona dentro del límite de 10 s por imagen que fija el proxy.**
+
+**Lecciones de la prueba (para no repetirlas):**
+- La placa no resuelve el nombre `socfpga` (el proxy devolvía 502 en 0.04 s: `getaddrinfo` falla). Para las pruebas, pedir el origen por `127.0.0.1` o por IP numérica; el nombre sirve solo para llegar al proxy desde la PC.
+- La PC (Windows) no es alcanzable desde la placa (ni con una regla de firewall de entrada para el 8000): se sirvieron las imágenes desde la propia placa con `busybox httpd -p 9000 -h <dir>`. La regla "FPGate test 8000" quedó creada en el firewall de la PC y puede borrarse.
+- Con `--selftest 20` en la placa hacen falta los 20 vectores en `pkg/vectors/` (`scp -O model/quant/release/e1_r7/vectors/img_*.f32 ...`).
+- La hora de la placa parece incorrecta (`valid until` vacío en el aviso de la CA): corregir con `date` o NTP antes de usar HTTPS con certificados.
