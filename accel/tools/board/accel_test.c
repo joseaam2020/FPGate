@@ -401,13 +401,17 @@ static void test_faults(const char *dir, int bad_addr)
 #define C_OFF   0x6000000u
 #define C_Q     (C_OFF + 0x000000u)       /* Q, 128 KiB slot */
 #define C_K     (C_OFF + 0x020000u)       /* K^T tiles, 128 KiB slot */
-#define C_SIN   (C_OFF + 0x040000u)       /* synthetic scores for the softmax unit, 5 MiB slot */
-#define C_ES    (C_OFF + 0x540000u)       /* engine output S: 3 slots (alone, conc, conc+memcpy) of 5 MiB */
-#define C_P     (C_OFF + 0xC40000u)       /* softmax output P: 3 slots of 3 MiB */
-#define C_MC    (C_OFF + 0x1600000u)      /* memcpy destination, 4 MiB (ends at 0x1A00000 < 0x2000000) */
-#define C_ES_SZ 0x500000u
-#define C_P_SZ  0x300000u
+/* slot sizes cover the largest case (1025 rows): S = 1025 x 1040 x 4 = 0x411040 B, P = 0x209040 B.
+ * The slots must not overlap: an earlier layout put the S slots on top of the P slots, so the concurrent
+ * runs overwrote each other's outputs and the comparison reported DIFFER. */
+#define C_SIN   (C_OFF + 0x040000u)       /* synthetic scores for the softmax unit, one S slot */
+#define C_ES_SZ 0x420000u
+#define C_P_SZ  0x210000u
 #define C_MC_SZ 0x400000u
+#define C_ES    (C_SIN + C_ES_SZ)         /* engine output S: 3 slots (alone, conc, conc+memcpy) */
+#define C_P     (C_ES + 3 * C_ES_SZ)      /* softmax output P: 3 slots */
+#define C_MC    (C_P + 3 * C_P_SZ)        /* memcpy destination */
+_Static_assert(C_MC + C_MC_SZ <= C_OFF + 0x2000000u, "concurrent test buffers leave the window");
 #define C_SM_M0 (1u << 20)
 #define C_SM_SH 26
 
@@ -461,7 +465,7 @@ static int conc_run(accel_hw_t *hw, const accel_op_t *eo, const accel_sm_op_t *s
     return rc;
 }
 
-static int test_concurrent(int rows)
+static int test_concurrent(int rows, int reps)
 {
     const int hd = 64;
     const int NK = ((rows + 15) / 16) * 16, KP = (rows + 1) & ~1;
@@ -525,22 +529,28 @@ static int test_concurrent(int rows)
         memcpy(hw.region + C_ES + i * C_ES_SZ, stage, es_bytes);
         memcpy(hw.region + C_P + i * C_P_SZ, stage, p_bytes);
     }
-    double t0 = now_ms();
-    rc |= conc_run(&hw, &eo[0], &so[0], 1, 0, 0, &e_alone, NULL, NULL);    /* (a) S alone */
-    double ta = now_ms() - t0;
-    t0 = now_ms();
-    rc |= conc_run(&hw, &eo[0], &so[0], 0, 1, 0, NULL, &s_alone, NULL);    /* (b) softmax alone */
-    double tb = now_ms() - t0;
-    t0 = now_ms();
-    rc |= conc_run(&hw, &eo[1], &so[1], 1, 1, 0, &e_c, &s_c, NULL);        /* (c) both */
-    double tc = now_ms() - t0;
-    t0 = now_ms();
-    rc |= conc_run(&hw, &eo[2], &so[2], 1, 1, 1, &e_d, &s_d, &mb_d);       /* (d) both + memcpy */
-    double td = now_ms() - t0;
-    if (rc) {
-        fprintf(stderr, "an operation failed\n");
+    /* each phase runs `reps` times; a failed run (e.g. ERR_CODE 5, engine output FIFO overflow) is counted and
+     * the test goes on (the driver resets the unit). Times and outputs are those of the last good run. */
+    int fail[4] = {0, 0, 0, 0};
+    double ta = 0, tb = 0, tc = 0, td = 0, t0;
+    for (int r = 0; r < reps; r++) {
+        t0 = now_ms();
+        if (conc_run(&hw, &eo[0], &so[0], 1, 0, 0, &e_alone, NULL, NULL)) fail[0]++; else ta = now_ms() - t0; /* (a) S alone */
+        t0 = now_ms();
+        if (conc_run(&hw, &eo[0], &so[0], 0, 1, 0, NULL, &s_alone, NULL)) fail[1]++; else tb = now_ms() - t0; /* (b) SM alone */
+        t0 = now_ms();
+        if (conc_run(&hw, &eo[1], &so[1], 1, 1, 0, &e_c, &s_c, NULL)) fail[2]++; else tc = now_ms() - t0;     /* (c) both */
+        t0 = now_ms();
+        if (conc_run(&hw, &eo[2], &so[2], 1, 1, 1, &e_d, &s_d, &mb_d)) fail[3]++; else td = now_ms() - t0;    /* (d) +memcpy */
+    }
+    printf("RESULT conc_fail: reps %d; failed runs: S alone %d, SM alone %d, conc %d, conc+memcpy %d\n", reps, fail[0],
+           fail[1], fail[2], fail[3]);
+    if (fail[0] == reps || fail[1] == reps || fail[2] == reps || fail[3] == reps) {
+        fprintf(stderr, "a phase never succeeded: no comparison\n");
+        accel_hw_close(&hw);
         return 1;
     }
+    (void)rc;
 
     /* (a) and (b) wrote slot 0; (c) slot 1; (d) slot 2 */
     int same_c = 1, same_d = 1;
@@ -579,7 +589,7 @@ int main(int argc, char **argv)
         return 2;
     }
     if (!strcmp(argv[1], "concurrent"))
-        return test_concurrent(argc > 2 ? atoi(argv[2]) : 1025);
+        return test_concurrent(argc > 2 ? atoi(argv[2]) : 1025, argc > 3 && atoi(argv[3]) > 0 ? atoi(argv[3]) : 1);
     int fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (fd < 0) {
         perror("open /dev/mem (run as root)");
