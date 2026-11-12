@@ -15,6 +15,19 @@ static inline int32_t vaddvq_s32_compat(int32x4_t v)
 }
 #endif
 
+/* Scalar reference element: exact rintf(x / sc) clamped to +-qm (kept as the fallback of the NEON path). */
+static inline int quant_one(float x, float sc, float inv, int qm)
+{
+    const float magic = 12582912.0f; /* 1.5 * 2^23 */
+    const float t = x * inv;
+    float r = (t + magic) - magic;
+    const float f = fabsf(t - truncf(t));
+    if (fabsf(f - 0.5f) < 1e-5f * fabsf(t) + 1e-6f)
+        r = rintf(x / sc);
+    int v = (int)r;
+    return v > qm ? qm : v < -qm ? -qm : v;
+}
+
 void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
 {
     const float sc = (float)scale;
@@ -24,17 +37,51 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
      * ulp, which can only change the rounded value when the quotient is within that error of a
      * half-integer. Those (rare) elements are recomputed with the real division. Values with
      * |q| >= 2^22 are clamped anyway (qm <= 32767), so the magic-number rounding is valid. */
-    const float magic = 12582912.0f; /* 1.5 * 2^23 */
     const ptrdiff_t nn = (ptrdiff_t)n;
+    ptrdiff_t i0 = 0;
+#ifdef __ARM_NEON
+    /* NEON path, 4 floats per step. Exactness: vmulq_f32 / vaddq_f32 / vsubq_f32 round to nearest
+     * even on normal numbers, exactly like the scalar code. If t is denormal the result is 0 in both
+     * paths (|t| < 1 rounds to 0 or +-1 identically and no tie candidate arises). d = |t - r| equals
+     * min(f, 1 - f) with f = |t - trunc(t)|, so |d - 0.5| is the scalar tie test. Any lane that is a
+     * tie candidate, or has |t| >= 2^22 (or NaN), is recomputed with the exact scalar code. */
+    const float32x4_t vinv = vdupq_n_f32(inv), vmagic = vdupq_n_f32(12582912.0f);
+    const float32x4_t vhalf = vdupq_n_f32(0.5f), vk = vdupq_n_f32(1e-5f), ve = vdupq_n_f32(1e-6f);
+    const float32x4_t vbig = vdupq_n_f32(4194304.0f);
+    const int32x4_t vqm = vdupq_n_s32(qm), vnqm = vdupq_n_s32(-qm);
+    const ptrdiff_t nv = nn & ~(ptrdiff_t)3;
 #pragma omp parallel for schedule(static) if (n > 4096)
-    for (ptrdiff_t i = 0; i < nn; i++) {
-        const float t = x[i] * inv;
-        float r = (t + magic) - magic;
-        const float f = fabsf(t - truncf(t));
-        if (fabsf(f - 0.5f) < 1e-5f * fabsf(t) + 1e-6f)
-            r = rintf(x[i] / sc);
-        int v = (int)r;
-        v = v > qm ? qm : v < -qm ? -qm : v;
+    for (ptrdiff_t i = 0; i < nv; i += 4) {
+        const float32x4_t xv = vld1q_f32(x + i);
+        const float32x4_t t = vmulq_f32(xv, vinv);
+        const float32x4_t r = vsubq_f32(vaddq_f32(t, vmagic), vmagic);
+        const float32x4_t at = vabsq_f32(t);
+        const float32x4_t d = vabsq_f32(vsubq_f32(t, r));
+        /* tie candidate: |d - 0.5| < 1e-5*|t| + 1e-6 (separate mul and add, no FMA) */
+        const float32x4_t lim = vaddq_f32(vmulq_f32(vk, at), ve);
+        const uint32x4_t tie = vcltq_f32(vabsq_f32(vsubq_f32(d, vhalf)), lim);
+        const uint32x4_t ok = vcltq_f32(at, vbig); /* false for NaN as well */
+        int32x4_t v = vcvtq_s32_f32(r);
+        v = vminq_s32(vmaxq_s32(v, vnqm), vqm);
+        const uint32x4_t bad = vmvnq_u32(vandq_u32(ok, vmvnq_u32(tie)));
+        const uint32x2_t b2 = vorr_u32(vget_low_u32(bad), vget_high_u32(bad));
+        if (vget_lane_u32(vpmax_u32(b2, b2), 0)) {
+            int32_t tmp[4];
+            for (int k = 0; k < 4; k++)
+                tmp[k] = quant_one(x[i + k], sc, inv, qm);
+            v = vld1q_s32(tmp);
+        }
+        const int16x4_t v16 = vmovn_s32(v);
+        if (bits == 8)
+            vst1_lane_u32((uint32_t *)((int8_t *)q + i), vreinterpret_u32_s8(vqmovn_s16(vcombine_s16(v16, v16))), 0);
+        else
+            vst1_s16((int16_t *)q + i, v16);
+    }
+    i0 = nv;
+#endif
+#pragma omp parallel for schedule(static) if (n > 4096)
+    for (ptrdiff_t i = i0; i < nn; i++) {
+        const int v = quant_one(x[i], sc, inv, qm);
         if (bits == 8)
             ((int8_t *)q)[i] = (int8_t)v;
         else
