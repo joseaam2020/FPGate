@@ -226,12 +226,17 @@ int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double t
     return accel_hw_wait(h, op, st, timeout_s);
 }
 
-int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s)
+int accel_hw_sm_start(accel_hw_t *h, const accel_sm_op_t *op)
 {
+    if (h->sm_in_flight) {
+        fprintf(stderr, "accel: softmax start while a softmax is still in flight (call accel_hw_sm_wait first)\n");
+        return -1;
+    }
     if (h->sim) {
         if (accel_sim_sm_start(h, op) != 0)
             return -1;
-        return accel_sim_sm_wait(h, st);
+        h->sm_in_flight = 1;
+        return 0;
     }
     if (!h->has_softmax) {
         fprintf(stderr, "accel: this bitstream has no softmax unit\n");
@@ -247,8 +252,29 @@ int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, do
     wr(h, SM_M0, op->m0);
     wr(h, SM_SH, (uint32_t)op->sh);
     __sync_synchronize();
-    const double t0 = now_s();
+    h->sm_t_start = now_s();
     wr(h, SM_CTRL, CTRL_START);
+    h->sm_in_flight = 1;
+    return 0;
+}
+
+int accel_hw_sm_busy(const accel_hw_t *h)
+{
+    if (h->sim)
+        return accel_sim_sm_busy(h);
+    return (rd(h, SM_STATUS) & ST_BUSY) != 0;
+}
+
+int accel_hw_sm_wait(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s)
+{
+    if (!h->sm_in_flight) {
+        fprintf(stderr, "accel: softmax wait without a started softmax\n");
+        return -1;
+    }
+    h->sm_in_flight = 0;
+    if (h->sim)
+        return accel_sim_sm_wait(h, st);
+    const double t0 = h->sm_t_start;
     uint32_t s;
     do {
         s = rd(h, SM_STATUS);
@@ -271,4 +297,11 @@ int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, do
         return -1;
     }
     return 0;
+}
+
+int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s)
+{
+    if (accel_hw_sm_start(h, op) != 0)
+        return -1;
+    return accel_hw_sm_wait(h, op, st, timeout_s);
 }

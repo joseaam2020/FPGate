@@ -27,6 +27,8 @@ typedef struct accel_hw {
     struct accel_sim *sim;      /* software engine (accel_hw_open_sim); NULL on the real hardware */
     double t_start;             /* wall time of the last accel_hw_start */
     int in_flight;              /* an operation was started and not yet collected with accel_hw_wait */
+    double sm_t_start;          /* wall time of the last accel_hw_sm_start */
+    int sm_in_flight;           /* a softmax was started and not yet collected with accel_hw_sm_wait */
 } accel_hw_t;
 
 typedef struct {
@@ -64,6 +66,12 @@ typedef struct {
 
 /* softmax unit: scores (RAW32 output of the engine) -> probabilities in the activation format. 0 on DONE. */
 int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
+
+/* Asynchronous softmax: sm_start fails if a softmax is already in flight (independent of the linear engine's
+ * in_flight); sm_wait collects it (op = the same descriptor); sm_busy is non-blocking. */
+int accel_hw_sm_start(accel_hw_t *h, const accel_sm_op_t *op);
+int accel_hw_sm_busy(const accel_hw_t *h);
+int accel_hw_sm_wait(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
 
 /* Software model of the linear engine, for testing on a PC (no FPGA, no /dev/mem): the region is
  * ordinary memory and an operation runs on a worker thread that decodes the same packed formats and
