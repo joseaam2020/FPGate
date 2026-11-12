@@ -518,6 +518,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
     const pkg_t *p = m->p;
     const int D = m->dim, r0 = j->row0, nr = j->nr;
     double tt = now_s();
+    const double t_step0 = tt;          /* PL_LAP moves tt, so the trace needs the step's own start */
     switch (s->kind) {
     case PS_LN: {
         const float *in = (s->from_hh ? m->hh : m->x) + (size_t)r0 * s->dim;
@@ -630,7 +631,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
     }
     if (g_tr) {
         static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope"};
-        tr_add("arm", nm[s->kind], slot, tt, now_s(), 0);
+        tr_add("arm", nm[s->kind], slot, t_step0, now_s(), 0);
     }
 }
 
