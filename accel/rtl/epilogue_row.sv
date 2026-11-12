@@ -20,6 +20,7 @@ module epilogue_row
   input  logic        [COLS-1:0][5:0]   shift,
   input  logic                          out16,
   input  logic                          raw,        // deliver the accumulator row unchanged (row_raw)
+  input  logic                          out_room,   // the consumer can take one more row (registered)
   // accumulator rows
   input  logic                          in_valid,
   output logic                          in_ready,
@@ -37,17 +38,22 @@ module epilogue_row
 
   // The array holds the row on in_data/in_last while in_ready is low, so the
   // epilogue reads it in place (no copy) and only releases it on the last beat.
-  // in_ready is a register that is high exactly during the last beat.
+  // ready_q is a register that is high exactly during the last beat; the row is only
+  // taken there if the consumer has room, otherwise the last beat is held (and not
+  // fed to the lanes again). Raw rows skip the lanes: two beats per row, one per
+  // 256-bit half that the engine writes to its FIFO.
   logic [BW-1:0] beat, beat_n;
   logic          ready_q;
-  assign in_ready = ready_q;
+  wire  [BW-1:0] last_beat = raw ? BW'((NB > 2) ? 1 : NB - 1) : BW'(NB - 1);
+  assign in_ready = ready_q & out_room;
 
-  wire accept = in_valid && ready_q;
+  wire accept = in_valid && in_ready;
+  wire step   = in_valid && !ready_q;          // a non-final beat
 
   always_comb begin
     beat_n = beat;
-    if (accept)        beat_n = '0;
-    else if (in_valid) beat_n = beat + 1'b1;
+    if (accept)    beat_n = '0;
+    else if (step) beat_n = beat + 1'b1;
   end
 
   always_ff @(posedge clk) begin
@@ -56,7 +62,7 @@ module epilogue_row
       ready_q <= (NB == 1);
     end else begin
       beat    <= beat_n;
-      ready_q <= (beat_n == BW'(NB - 1));
+      ready_q <= (beat_n == last_beat);
     end
   end
 
@@ -80,7 +86,7 @@ module epilogue_row
     beat_r     <= beat;
     lastbeat_r <= (beat == BW'(NB - 1));
     rowlast_r  <= in_last;
-    lane_valid <= rst_n & in_valid & ~raw;
+    lane_valid <= rst_n & (step | accept) & ~raw;
   end
 
   // ---- lanes ------------------------------------------------------------------

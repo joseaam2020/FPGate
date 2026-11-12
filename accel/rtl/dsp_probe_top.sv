@@ -38,6 +38,7 @@ module dsp_probe_top
     .in_first(cnt == 0),
     .in_shift(1'b0),
     .in_last (cnt == K-1),
+    .in_tag(1'b0), .last_ok(), .drain_tag(),
     .a_vec(lfsr[NA-1:0]),
     .w_vec(lfsr[N-1:NA]),
     .busy, .drain_valid, .drain_ready(1'b1), .drain_last(), .drain_row, .drain_data

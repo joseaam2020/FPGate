@@ -76,6 +76,7 @@ module gemm_engine
   logic [7:0]  ext_err_code;
   logic        seq_busy;
   logic [7:0]  fifo_free;
+  logic        fd_busy, ctx_full;
 
   tile_sequencer #(.A_WORDS(A_BEATS * 2), .W_BEATS(W_BEATS), .WD_LIMIT(WD_LIMIT)) u_seq (
     .clk, .rst_n(rst_seq), .start,
@@ -85,7 +86,8 @@ module gemm_engine
     .w_load_sel, .w_comp_sel,
     .fd_start, .fd_a_base, .fd_k, .fd_two_pass,
     .sub_start, .sub_addr, .sub_rows_valid,
-    .row_last_seen, .lt_busy, .wr_idle, .fifo_free, .progress, .ext_err_valid, .ext_err_code,
+    .row_last_seen, .lt_busy, .fd_busy, .ctx_full, .wr_idle, .fifo_free, .progress,
+    .ext_err_valid, .ext_err_code,
     .busy(seq_busy), .done(hw_done), .err_valid(hw_err_valid), .err_code(hw_err_code), .abort
   );
 
@@ -129,6 +131,7 @@ module gemm_engine
   logic signed [COLS-1:0][31:0] bias;
   logic        [COLS-1:0][30:0] m0;
   logic        [COLS-1:0][5:0]  shift;
+  logic                         ep_sel, last_ok;
 
   tile_buffers #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS)) u_buf (
     .clk,
@@ -137,18 +140,18 @@ module gemm_engine
     .w_load_sel, .w_we, .w_waddr(w_widx[$clog2(W_BEATS)-1:0]), .w_wdata(beat_data),
     .c_we, .c_idx(beat_idx[2:0]), .c_wdata(beat_data),
     .w_comp_sel, .w_raddr(fd_w_raddr[$clog2(W_BEATS):0]), .w_rdata,
-    .bias, .m0, .shift
+    .ep_sel, .bias, .m0, .shift
   );
 
   // ---- feeder and array ------------------------------------------------------------
-  logic                              in_valid, in_first, in_shift, in_last, fd_busy;
+  logic                              in_valid, in_first, in_shift, in_last;
   logic signed [ROWS-1:0][ACT_W-1:0] a_vec;
   logic signed [COLS-1:0][WGT_W-1:0] w_vec;
 
   operand_feeder #(.AW(16)) u_feed (
     .clk, .rst_n(rst_dp),
     .start(fd_start), .a_base(fd_a_base), .k_steps(fd_k), .two_pass(fd_two_pass), .in_signed(insign),
-    .busy(fd_busy),
+    .last_ok, .busy(fd_busy),
     .a_raddr(fd_a_raddr), .a_rdata, .w_raddr(fd_w_raddr), .w_rdata,
     .in_valid, .in_first, .in_shift, .in_last, .a_vec, .w_vec
   );
@@ -156,34 +159,63 @@ module gemm_engine
   logic                         row_valid, row_last;
   logic signed [COLS-1:0][15:0] row_data;
   logic signed [COLS-1:0][31:0] row_raw;
+  logic                         out_room;
 
+  // the tag of a subtile is the weight buffer it was computed from: its rows need that
+  // buffer's epilogue constants, even after the compute side has swapped buffers
   linear_tile #(.LANES(LANES)) u_tile (
     .clk, .rst_n(rst_dp),
-    .in_valid, .in_first, .in_shift, .in_last, .a_vec, .w_vec,
-    .bias, .m0, .shift, .out16, .raw32,
+    .in_valid, .in_first, .in_shift, .in_last, .in_tag(w_comp_sel), .a_vec, .w_vec,
+    .last_ok, .drain_tag(ep_sel),
+    .bias, .m0, .shift, .out16, .raw32, .out_room,
     .busy(lt_busy), .row_valid, .row_data, .row_raw, .row_last
   );
 
   // ---- output rows: address, byte enables, FIFO ----------------------------------------
+  // Two subtile contexts: the one whose rows are coming out (cur) and the next one,
+  // started while cur still drains (nxt). cur moves on with the last row of a subtile.
   logic [31:0] cur_addr, stride_q;
   logic [4:0]  rows_valid_q, rcnt;
-  logic [31:0] cur_addr_next;
+  logic        cur_v, nxt_v;
+  logic [31:0] nxt_addr;
+  logic [4:0]  nxt_rows;
+
+  wire sub_end = row_valid && row_last;
+  assign ctx_full = nxt_v;
 
   always_ff @(posedge clk) begin
     row_last_seen <= 1'b0;
     if (!rst_dp) begin
-      rcnt <= '0;
+      rcnt  <= '0;
+      cur_v <= 1'b0;
+      nxt_v <= 1'b0;
     end else begin
-      if (sub_start) begin
-        cur_addr     <= sub_addr;
-        rows_valid_q <= sub_rows_valid;
-        rcnt         <= '0;
-        stride_q     <= stride_out;
-      end else if (row_valid) begin
+      if (sub_start) stride_q <= stride_out;
+      if (row_valid) begin
         cur_addr <= cur_addr + stride_q;
         rcnt     <= rcnt + 1'b1;
       end
-      if (row_valid && row_last) row_last_seen <= 1'b1;
+      if (sub_end) begin
+        // the next context (or one arriving now) takes over
+        if (nxt_v) begin
+          cur_addr <= nxt_addr; rows_valid_q <= nxt_rows; rcnt <= '0;
+          nxt_v    <= sub_start;
+          nxt_addr <= sub_addr; nxt_rows <= sub_rows_valid;
+        end else if (sub_start) begin
+          cur_addr <= sub_addr; rows_valid_q <= sub_rows_valid; rcnt <= '0;
+        end else begin
+          cur_v <= 1'b0;
+        end
+      end else if (sub_start) begin
+        if (!cur_v) begin
+          cur_v    <= 1'b1;
+          cur_addr <= sub_addr; rows_valid_q <= sub_rows_valid; rcnt <= '0;
+        end else begin
+          nxt_v    <= 1'b1;
+          nxt_addr <= sub_addr; nxt_rows <= sub_rows_valid;
+        end
+      end
+      if (sub_end) row_last_seen <= 1'b1;
     end
   end
 
@@ -215,7 +247,7 @@ module gemm_engine
   logic         overflow;
 
   // raw INT32 rows are 64 bytes: the low half goes in with the push, the high half one cycle later
-  // (rows come at least 4 cycles apart, so the FIFO write port is free)
+  // (rows come at least 2 cycles apart, so the FIFO write port is free)
   logic [255:0] raw_lo, raw_hi;
   logic         raw_hold;
   logic [319:0] raw_hold_entry;
@@ -274,6 +306,17 @@ module gemm_engine
   always_ff @(posedge clk) begin
     if (!rst_dp) fifo_free <= 8'(OUT_FIFO);
     else         fifo_free <= 8'(OUT_FIFO) - 8'(fifo_used) - 8'(raw_hold);
+  end
+
+  // Row credit: the epilogue only takes a row from the array while out_room is high.
+  // Between that handshake and the push the row is in flight: at most 3 rows in the
+  // requant lanes (latency RQ_LATENCY + 2 at one row per COLS/LANES = 4 cycles), or
+  // one raw row (2 entries). Add the row being taken (up to 2 entries) and one cycle of
+  // staleness of this register (another row, up to 2 entries): 7 entries; 8 kept free.
+  localparam int ROOM_RESERVE = 8;
+  always_ff @(posedge clk) begin
+    if (!rst_dp) out_room <= 1'b0;
+    else         out_room <= (32'(fifo_used) + 32'(raw_hold) + ROOM_RESERVE) <= OUT_FIFO;
   end
 
   // ---- errors, progress, counters ----------------------------------------------------------

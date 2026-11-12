@@ -19,6 +19,7 @@ Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 $rtl = @('fpgate_pkg.sv') + (Get-ChildItem (Join-Path $root 'rtl') -Filter *.sv | Where-Object Name -ne 'fpgate_pkg.sv' | ForEach-Object Name)
 $files = $rtl | ForEach-Object { Join-Path $root "rtl\$_" }
 $files += Join-Path $root 'tb\avalon_mem_model.sv'
+$files += Join-Path $root 'tb\cyc_mon.sv'
 $files += Join-Path $root 'tb\tb_cycles.sv'
 & "$ms\vlog.exe" -sv -work $work @files | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host 'compile failed'; exit 1 }
@@ -59,7 +60,7 @@ foreach ($mn in $memNames) {
            "-gWAIT_PCT=$($m[0])", "-gGAP_PCT=$($m[1])", "-gLAT=$($m[2])")
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $out = & "$ms\vsim.exe" -c -work $work @g -do 'run -all; quit -f' tb_cycles
-    $line = ($out | Where-Object { $_ -match 'RESULT' }) -replace '^# ', ''
+    $line = (@($out | Where-Object { $_ -match 'RESULT' }) -replace '^# ', '') -join "`n    "
     Write-Host ("[{0}] {1}: {2}  ({3:N0} s)" -f $mn, $c[0], $line, $sw.Elapsed.TotalSeconds)
   }
 }

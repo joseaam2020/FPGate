@@ -21,6 +21,7 @@ module operand_feeder
   input  logic [AW-1:0]                     k_steps,     // K
   input  logic                              two_pass,
   input  logic                              in_signed,
+  input  logic                              last_ok,     // the array takes the last k-step now
   output logic                              busy,
   // RAM read ports
   output logic [AW-1:0]                     a_raddr,
@@ -46,21 +47,26 @@ module operand_feeder
   // stage-1 control (aligned with the RAM outputs)
   logic v1, f1, s1, l1, p1;
 
+  // the last k-step waits (as bubbles) until the array's shadows are free
+  wire last_step = (k == k_steps - 1) && (pass == two_pass);
+  // (last_ok is registered in the array: it only reflects an in_last one cycle after l1)
+  wire adv       = run && (!last_step || (last_ok && !l1));
+
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       run <= 1'b0; pass <= 1'b0; k <= '0;
       v1 <= 1'b0; f1 <= 1'b0; s1 <= 1'b0; l1 <= 1'b0; p1 <= 1'b0;
     end else begin
-      v1 <= run;
-      f1 <= run && (k == 0) && !pass;
-      s1 <= run && (k == 0) &&  pass;
-      l1 <= run && (k == k_steps - 1) && (pass == two_pass);
+      v1 <= adv;
+      f1 <= adv && (k == 0) && !pass;
+      s1 <= adv && (k == 0) &&  pass;
+      l1 <= adv && last_step;
       p1 <= pass;
       if (start) begin
         run  <= 1'b1;
         pass <= 1'b0;
         k    <= '0;
-      end else if (run) begin
+      end else if (adv) begin
         if (k == k_steps - 1) begin
           k <= '0;
           if (two_pass && !pass) pass <= 1'b1;

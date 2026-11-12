@@ -7,8 +7,16 @@
 //     load the A panel; load W tile 0
 //     for tile (16 output channels):
 //       prefetch W tile+1 (other buffer) while computing
-//       for subtile in panel: feed the array, wait for its 16 rows
+//       for subtile in panel: feed the array (its rows drain while the next one is fed)
 //       wait for the prefetch, swap the weight buffers
+//
+// Subtiles are fed back to back; the array's shadow accumulators let a subtile drain
+// while the next one computes. The output FIFO is protected row by row (the epilogue
+// only takes a row when the engine has room for it). Buffers are only overwritten
+// once no row that needs them is still in flight: the prefetch into the other
+// weight buffer (which also holds the epilogue constants of the previous tile) waits
+// for the subtiles of that tile to come out, a new panel's weight load waits for the
+// datapath to be empty.
 //
 // Error codes: 2 bad parameters, 3 DMA read timeout, 4 DMA write timeout,
 // 5 output FIFO overflow, 6 watchdog (no progress).
@@ -48,8 +56,10 @@ module tile_sequencer #(
   output logic [31:0] sub_addr,
   output logic [4:0]  sub_rows_valid,
   // events from the datapath
-  input  logic        row_last_seen,
+  input  logic        row_last_seen,  // the last row of a subtile has come out (one pulse per subtile)
   input  logic        lt_busy,
+  input  logic        fd_busy,        // the feeder is walking a subtile
+  input  logic        ctx_full,       // the output side holds two subtile contexts already
   input  logic        wr_idle,
   input  logic [7:0]  fifo_free,      // free entries of the output FIFO (registered)
   input  logic        progress,
@@ -84,12 +94,18 @@ module tile_sequencer #(
   logic [8:0]  ccnt;
   logic [31:0] panel_out_base, ct_base, panel_acc, w_next_addr;
   logic        pf_pending, pf_done;
+  logic        pf_req;                  // prefetch wanted, not issued yet
+  logic [2:0]  sub_out;                 // subtiles started whose last row is not out yet
+  logic [2:0]  pf_wait;                 // of those, the ones of the previous tile
   logic [7:0]  next_err;
 
   // watchdog
   logic [31:0] wd;
   logic [7:0]  fifo_free_q;
-  wire  [7:0]  fifo_need = op_raw32_q ? 8'd32 : 8'd16;
+
+  // the prefetch is issued from the compute states once the previous tile is out
+  wire pf_state = (state == S_SSTART) || (state == S_RUN) || (state == S_DRAIN) || (state == S_TEND);
+  wire pf_issue = pf_state && pf_req && (pf_wait == 3'd0);
 
   assign busy        = (state != S_IDLE);
   assign fd_k        = k;
@@ -109,15 +125,16 @@ module tile_sequencer #(
         rd_cmd_addr = a_addr_cur; rd_cmd_beats = a_beats;
       end
       S_LOADW_CMD: begin
-        rd_cmd_valid = 1'b1;
+        // buffer 0 may still hold the constants of rows in flight
+        rd_cmd_valid = !lt_busy && (sub_out == 3'd0);
         rd_cmd_addr = w_base; rd_cmd_beats = 16'd8 + kb;
-      end
-      S_PF_CMD: begin
-        rd_cmd_valid = 1'b1;
-        rd_cmd_addr = w_next_addr; rd_cmd_beats = 16'd8 + kb;
       end
       default: ;
     endcase
+    if (pf_issue) begin
+      rd_cmd_valid = 1'b1;
+      rd_cmd_addr = w_next_addr; rd_cmd_beats = 16'd8 + kb;
+    end
   end
 
   always_ff @(posedge clk) begin
@@ -135,6 +152,17 @@ module tile_sequencer #(
     end else begin
       // the prefetch may finish while a subtile is computing: remember it
       if (rd_done && pf_pending) pf_done <= 1'b1;
+
+      // subtiles in flight (started, last row not out yet)
+      if (state == S_IDLE) sub_out <= '0;
+      else                 sub_out <= sub_out + 3'(sub_start) - 3'(row_last_seen);
+      if (row_last_seen && pf_wait != 3'd0) pf_wait <= pf_wait - 1'b1;
+      if (pf_issue && rd_cmd_ready) begin
+        pf_req      <= 1'b0;
+        pf_pending  <= 1'b1;
+        pf_done     <= 1'b0;
+        w_next_addr <= w_next_addr + w_tile_bytes;
+      end
 
       // watchdog
       if (state == S_IDLE || progress || state != state_q || fifo_free != fifo_free_q) wd <= '0;
@@ -206,7 +234,7 @@ module tile_sequencer #(
           state      <= S_LOADW_CMD;
         end
 
-        S_LOADW_CMD: if (rd_cmd_ready) state <= S_LOADW_WAIT;
+        S_LOADW_CMD: if (rd_cmd_valid && rd_cmd_ready) state <= S_LOADW_WAIT;
 
         S_LOADW_WAIT: if (rd_done) begin
           w_comp_sel  <= 1'b0;
@@ -223,27 +251,24 @@ module tile_sequencer #(
           a_base     <= '0;
           pf_pending <= 1'b0;
           pf_done    <= 1'b0;
-          state      <= (ct + 32'd1 < nt) ? S_PF_CMD : S_SSTART;
+          // the other buffer still holds the constants of the subtiles in flight
+          pf_req     <= (ct + 32'd1 < nt);
+          pf_wait    <= sub_out - 3'(row_last_seen);
+          state      <= S_SSTART;
         end
 
-        S_PF_CMD: if (rd_cmd_ready) begin
-          pf_pending  <= 1'b1;
-          pf_done     <= 1'b0;
-          w_next_addr <= w_next_addr + w_tile_bytes;
-          state       <= S_SSTART;
-        end
-
-        // a subtile pushes 16 rows (32 FIFO entries in RAW32): wait until they fit
-        S_SSTART: if (fifo_free >= fifo_need) begin
+        // the output side keeps the address of two subtiles at most
+        S_SSTART: if (!ctx_full) begin
           sub_rows_valid <= is_last_sub ? (5'(m - 32'd1) & 5'h0F) + 5'd1 : 5'd16;
           sub_start      <= 1'b1;
           fd_start       <= 1'b1;
           state          <= S_RUN;
         end
 
-        S_RUN: if (row_last_seen) state <= S_DRAIN;
+        // the feeder takes the start one cycle late; its rows drain on their own
+        S_RUN: if (state_q == S_RUN && !fd_busy) state <= S_DRAIN;
 
-        S_DRAIN: if (!lt_busy) begin
+        S_DRAIN: begin
           a_base   <= a_base + planes_k;
           sub_addr <= sub_addr + stride16;
           if (ct == 0) panel_acc <= panel_acc + stride16;
@@ -253,7 +278,7 @@ module tile_sequencer #(
 
         S_TEND: begin
           // wait for the prefetch (it may have finished long ago)
-          if (!pf_pending || pf_done) begin
+          if (!pf_req && (!pf_pending || pf_done)) begin
             pf_pending <= 1'b0;
             pf_done    <= 1'b0;
             w_comp_sel <= w_load_sel;
@@ -270,7 +295,7 @@ module tile_sequencer #(
           state          <= (subs_left == 32'(panel_sub)) ? S_FLUSH : S_PSTART;
         end
 
-        S_FLUSH: if (wr_idle) state <= S_DONE;
+        S_FLUSH: if (wr_idle && !lt_busy && sub_out == 3'd0) state <= S_DONE;
 
         S_DONE: begin
           done  <= 1'b1;

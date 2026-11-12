@@ -14,7 +14,7 @@ module tb_core;
   logic rst_n = 0;
   always #3.333 clk = ~clk;
 
-  logic [5:0]   avs_address;
+  logic [6:0]   avs_address;
   logic         avs_write, avs_read, irq;
   logic [31:0]  avs_writedata, avs_readdata;
   logic [3:0]   avs_byteenable;
@@ -23,6 +23,14 @@ module tb_core;
   logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest;
   logic [7:0]   rd_burstcount, wr_burstcount;
   logic [255:0] rd_readdata, wr_writedata;
+
+  // softmax unit's masters: idle here, tied off
+  logic [31:0]  rd2_address, wr2_address, wr2_byteenable;
+  logic         rd2_read, wr2_write;
+  logic [7:0]   rd2_burstcount, wr2_burstcount;
+  logic [255:0] wr2_writedata;
+  logic         rd2_waitrequest = 0, rd2_readdatavalid = 0, wr2_waitrequest = 0;
+  logic [255:0] rd2_readdata = '0;
 
   fpgate_accel_core #(.A_BEATS(4096), .W_BEATS(1024), .LANES(4)) dut (.*);
 
@@ -41,13 +49,13 @@ module tb_core;
 
   task automatic wr(input int off, input logic [31:0] d);
     @(posedge clk); #1;
-    avs_address = off[7:2]; avs_writedata = d; avs_byteenable = 4'hF; avs_write = 1; avs_read = 0;
+    avs_address = off[8:2]; avs_writedata = d; avs_byteenable = 4'hF; avs_write = 1; avs_read = 0;
     @(posedge clk); #1;
     avs_write = 0;
   endtask
   task automatic rd(input int off, output logic [31:0] d);
     @(posedge clk); #1;
-    avs_address = off[7:2]; avs_read = 1; avs_write = 0; avs_byteenable = 4'hF;
+    avs_address = off[8:2]; avs_read = 1; avs_write = 0; avs_byteenable = 4'hF;
     @(posedge clk); #1;
     avs_read = 0;
     d = avs_readdata;

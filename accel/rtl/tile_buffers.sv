@@ -32,6 +32,8 @@ module tile_buffers
   input  logic                            w_comp_sel,
   input  logic [$clog2(W_BEATS):0]        w_raddr,      // 128-bit word index
   output logic [127:0]                    w_rdata,
+  // epilogue side: the constants of the tile whose rows are draining (it may lag w_comp_sel)
+  input  logic                            ep_sel,
   output logic signed [COLS-1:0][31:0]    bias,
   output logic        [COLS-1:0][30:0]    m0,
   output logic        [COLS-1:0][5:0]     shift
@@ -121,9 +123,9 @@ module tile_buffers
 
   always_comb begin
     for (int j = 0; j < COLS; j++) begin
-      bias[j]  = c_bias [w_comp_sel][j];
-      m0[j]    = c_m0   [w_comp_sel][j];
-      shift[j] = c_shift[w_comp_sel][j];
+      bias[j]  = c_bias [ep_sel][j];
+      m0[j]    = c_m0   [ep_sel][j];
+      shift[j] = c_shift[ep_sel][j];
     end
   end
 endmodule

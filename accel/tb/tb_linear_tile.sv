@@ -24,14 +24,15 @@ module tb_linear_tile;
   logic        [COLS-1:0][5:0]       shift;
   logic                              out16;
   logic                              raw32 = 1'b0;
+  logic                              in_tag = 1'b0, out_room = 1'b1;
   logic signed [COLS-1:0][31:0]      rr4, rr16;
 
   logic                              busy4, busy16;
   logic                              rv4, rv16, rl4, rl16;
   logic signed [COLS-1:0][15:0]      rd4, rd16;
 
-  linear_tile #(.LANES(4))  dut4  (.*, .busy(busy4),  .row_valid(rv4),  .row_data(rd4),  .row_raw(rr4),  .row_last(rl4));
-  linear_tile #(.LANES(16)) dut16 (.*, .busy(busy16), .row_valid(rv16), .row_data(rd16), .row_raw(rr16), .row_last(rl16));
+  linear_tile #(.LANES(4))  dut4  (.*, .last_ok(), .drain_tag(), .busy(busy4),  .row_valid(rv4),  .row_data(rd4),  .row_raw(rr4),  .row_last(rl4));
+  linear_tile #(.LANES(16)) dut16 (.*, .last_ok(), .drain_tag(), .busy(busy16), .row_valid(rv16), .row_data(rd16), .row_raw(rr16), .row_last(rl16));
 
   logic signed [15:0] got4  [ROWS][COLS];
   logic signed [15:0] got16 [ROWS][COLS];

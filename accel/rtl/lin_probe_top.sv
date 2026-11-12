@@ -41,6 +41,7 @@ module lin_probe_top
     .in_first(cnt == 0),
     .in_shift(1'b0),
     .in_last (cnt == K-1),
+    .in_tag(1'b0), .last_ok(), .drain_tag(), .out_room(1'b1),
     .a_vec(lfsr[NA-1:0]),
     .w_vec(lfsr[NA +: NW]),
     .bias (lfsr[NA+NW +: NB]),
