@@ -598,7 +598,12 @@ int main(int argc, char **argv)
             g_opt.chunk = 0;
         else if (!strcmp(argv[i], "--no-pipeline"))
             g_opt.pipeline = 0;
-        else if (!strcmp(argv[i], "--logits"))
+        else if (!strcmp(argv[i], "--trace") && i + 1 < argc) {
+            if (model_trace_open(argv[++i]) != 0) {
+                fprintf(stderr, "--trace: out of memory\n");
+                return 1;
+            }
+        } else if (!strcmp(argv[i], "--logits"))
             g_opt.logits = 1;
         else if (!strcmp(argv[i], "--chunk") && i + 1 < argc)
             g_opt.chunk = atoi(argv[++i]);

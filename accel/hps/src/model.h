@@ -48,6 +48,9 @@ void model_set_chunk(model_t *m, int rows);
  * works on another. 0: every layer runs on all rows before the next starts (the behaviour before the
  * pipeline). Needs model_set_chunk > 0; falls back by itself when something does not fit. */
 void model_set_pipeline(model_t *m, int on);
+/* --trace: record per-image events (engine, ARM steps, idle, softmax, packing) and write them as CSV
+ * t0,t1,kind,name,block,idx,cycles after each model_forward (path, path.1, path.2, ...). 0 on success. */
+int model_trace_open(const char *path);
 /* run only the first n blocks (tests); 0 = all */
 void model_limit_blocks(model_t *m, int n);
 const model_stats_t *model_stats(const model_t *m);

@@ -39,6 +39,69 @@ static double now_s(void)
 /* run a statement and add its wall time to a counter of model_stats_t */
 #define TIMED(field, stmt) do { double _t0 = now_s(); stmt; m->st.field += now_s() - _t0; } while (0)
 
+/* ---- per-image event trace (--trace FILE); with tracing off every hook is one pointer test ---- */
+#define TR_MAX 65536
+typedef struct { double t0, t1; char kind[8]; char name[24]; int block, idx; uint64_t cycles; } tr_ev_t;
+static tr_ev_t *g_tr;                   /* NULL = tracing off */
+static const char *g_tr_path;
+static int g_tr_n, g_tr_full, g_tr_img, g_tr_block;
+static double g_tr_base;
+
+static void tr_add(const char *kind, const char *name, int idx, double t0, double t1, uint64_t cycles)
+{
+    if (g_tr_n >= TR_MAX) {
+        if (!g_tr_full)
+            fprintf(stderr, "trace: event buffer full (%d), the rest of the image is not recorded\n", TR_MAX);
+        g_tr_full = 1;
+        return;
+    }
+    tr_ev_t *e = &g_tr[g_tr_n++];
+    e->t0 = t0 - g_tr_base;
+    e->t1 = t1 - g_tr_base;
+    snprintf(e->kind, sizeof e->kind, "%s", kind);
+    snprintf(e->name, sizeof e->name, "%s", name);
+    e->block = g_tr_block;
+    e->idx = idx;
+    e->cycles = cycles;
+}
+
+int model_trace_open(const char *path)
+{
+    g_tr = (tr_ev_t *)malloc(sizeof(tr_ev_t) * TR_MAX);
+    if (!g_tr)
+        return -1;
+    g_tr_path = path;
+    g_tr_img = 0;
+    return 0;
+}
+
+static void tr_begin(void)
+{
+    g_tr_n = g_tr_full = g_tr_block = 0;
+    g_tr_base = now_s();
+}
+
+/* writes FILE for the first image, FILE.1, FILE.2, ... for the next ones */
+static void tr_end(void)
+{
+    char path[1024];
+    if (g_tr_img == 0)
+        snprintf(path, sizeof path, "%s", g_tr_path);
+    else
+        snprintf(path, sizeof path, "%s.%d", g_tr_path, g_tr_img);
+    g_tr_img++;
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        fprintf(stderr, "trace: cannot write %s\n", path);
+        return;
+    }
+    fprintf(f, "t0,t1,kind,name,block,idx,cycles\n");
+    for (int i = 0; i < g_tr_n; i++)
+        fprintf(f, "%.6f,%.6f,%s,%s,%d,%d,%llu\n", g_tr[i].t0, g_tr[i].t1, g_tr[i].kind, g_tr[i].name, g_tr[i].block,
+                g_tr[i].idx, (unsigned long long)g_tr[i].cycles);
+    fclose(f);
+}
+
 struct model {
     const pkg_t *p;
     int tokens, dim, max_neurons;
@@ -565,6 +628,10 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
     default:
         break;
     }
+    if (g_tr) {
+        static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope"};
+        tr_add("arm", nm[s->kind], slot, tt, now_s(), 0);
+    }
 }
 
 /* runs the step list on all chunks; 0 on success */
@@ -580,7 +647,9 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
     }
     int remaining = nj, inflight = -1;
     accel_op_t op;
-    double t_op = 0;
+    double t_op = 0, t_end = 0;
+    int in_j = -1;
+    const char *in_name = "";
     const double w0 = now_s();
     m->a_ok = 0;                        /* the region's activation area is about to hold chunk data (also if we fail) */
     while (remaining > 0) {
@@ -591,6 +660,8 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
                 return -1;
             m->st.cycles += st.cycles;
             m->st.ops++;
+            if (g_tr)
+                tr_add("eng", in_name, in_j, t_op, t_end > 0 ? t_end : now_s(), st.cycles);
             if (++jobs[inflight].pc == ns)
                 remaining--;
             inflight = -1;
@@ -612,6 +683,9 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
                     return -1;
                 inflight = j;
                 t_op = now_s();
+                t_end = 0;
+                in_j = j;
+                in_name = L->name;
                 break;
             }
         }
@@ -624,6 +698,8 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
             if (++jobs[j].pc == ns)
                 remaining--;
             did = 1;
+            if (g_tr && inflight >= 0 && t_end == 0 && !accel_hw_busy(m->hw))
+                t_end = now_s();
         }
         /* 4. nothing for the ARM to do: wait for the engine (spin on its status) */
         if (!did && inflight >= 0) {
@@ -631,6 +707,12 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
             while (accel_hw_busy(m->hw) && now_s() - t_op < 60.0)
                 ;
             m->st.pl_idle += now_s() - t;
+            if (g_tr) {
+                const double te = now_s();
+                tr_add("idle", "wait", in_j, t, te, 0);
+                if (t_end == 0 && !accel_hw_busy(m->hw))
+                    t_end = te;
+            }
             if (now_s() - t_op >= 60.0) {
                 fprintf(stderr, "pipeline: the engine did not finish in 60 s\n");
                 accel_hw_wait(m->hw, &op, NULL, 0.1);
@@ -714,6 +796,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     const int pk = p->patch, ps = p->patch_embed->in;   /* 14, 588 */
 
     const double t_patch0 = now_s();
+    if (g_tr)
+        tr_begin();
     /* ---- patch embedding: unfold (channel, ky, kx), INT8 GEMM, float de-quantisation ---- */
 #pragma omp parallel for schedule(static) collapse(2)
     for (int py = 0; py < side; py++)
@@ -747,6 +831,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     }
 
     m->st.t_patch += now_s() - t_patch0;
+    if (g_tr)
+        tr_add("cpu", "patch_embed", 0, t_patch0, now_s(), 0);
 
     /* ---- transformer blocks ---- */
     const int nb = (m->max_blocks > 0 && m->max_blocks < p->n_blocks) ? m->max_blocks : p->n_blocks;
@@ -764,6 +850,7 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     for (int bi = 0; bi < nb; bi++) {
         const block_t *B = &p->blocks[bi];
         const int A = B->q->out, H = B->heads, hd = A / H, N = B->neurons;
+        g_tr_block = bi;
 
         if (!pipe) {
         TIMED(t_ln, layer_norm(m->x, T, D, B->n1_g, B->n1_b, p->ln_eps, m->n));
@@ -844,6 +931,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     }
 
     /* ---- pooling, final LayerNorm, head ---- */
+    const double t_head0 = now_s();
+    g_tr_block = nb;
     float pooled[1024], pn[1024];
     for (int c = 0; c < D; c++) {
         double s = 0.0;
@@ -867,6 +956,10 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     }
     if (dbg)
         dbg(dbg_ctx, "logits", logits, 4, -4);
+    if (g_tr) {
+        tr_add("cpu", "head", 0, t_head0, now_s(), 0);
+        tr_end();
+    }
     return 0;
 }
 
@@ -930,6 +1023,8 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
         fpga_pack_v(m->v8 + (size_t)h * hd, T, A, hd, KP, (int32_t)B->av_m0, (int)B->av_sh, m->att_stage);
         memcpy(hw->region + ATT_V, m->att_stage, n);
         double t1 = now_s();
+        if (g_tr)
+            tr_add("cpu", "att_pack", h, t0, t1, 0);
 
         accel_stat_t st;
         accel_op_t s_op = {.M = (uint32_t)T, .N = (uint32_t)NK, .K = (uint32_t)hd, .in_bits = 8, .out_bits = 32,
@@ -939,6 +1034,8 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
             return -1;
         m->st.att_cyc_s += st.cycles;
         double t2 = now_s();
+        if (g_tr)
+            tr_add("eng", "att_s", h, t1, t2, st.cycles);
 
         accel_sm_op_t sm_op = {.rows = (uint32_t)T, .cols = (uint32_t)T, .kp = (uint32_t)KP,
                                .s_phys = ACCEL_REGION_PHYS + ATT_S, .s_stride = (uint32_t)NK * 4,
@@ -947,6 +1044,8 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
             return -1;
         m->st.att_cyc_sm += st.cycles;
         double t3 = now_s();
+        if (g_tr)
+            tr_add("sm", "softmax", h, t2, t3, st.cycles);
 
         if (m->check && h == 0)
             m->st.att_mismatches += att_check_stages(m, B, T, A, NK, KP, h, hd);
@@ -959,6 +1058,8 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
             return -1;
         m->st.att_cyc_pv += st.cycles;
         double t4 = now_s();
+        if (g_tr)
+            tr_add("eng", "att_pv", h, t3, t4, st.cycles);
         m->st.t_att_pack += t1 - t0;
         m->st.t_att_s += t2 - t1;
         m->st.t_att_sm += t3 - t2;
