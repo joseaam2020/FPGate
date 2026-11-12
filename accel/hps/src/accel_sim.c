@@ -285,7 +285,8 @@ int accel_hw_open_sim(accel_hw_t *h, size_t region_len)
     }
     h->region_len = region_len;
     h->mhz = 100.0;
-    h->has_softmax = 0;
+    h->hw_version = ACCEL_HW_VERSION_H5B;   /* models the h5b engine: concurrency is safe */
+    h->has_softmax = 1;
     h->sim->hw = h;
     return 0;
 }

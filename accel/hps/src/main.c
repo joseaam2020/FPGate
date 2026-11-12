@@ -34,11 +34,12 @@ static struct {
     int chunk;                  /* rows per engine operation, -1 = model default, 0 = no overlap */
     int pipeline;               /* row-chunk pipeline between attentions */
     int cpu_patch;              /* patch embedding on the CPU instead of the engine */
+    int att_overlap;            /* ATT_OVL_*: how the FPGA attention overlaps its heads */
     int logits;                 /* print the logits with 9 digits (compare two runs bit by bit) */
     accel_hw_t hw;
-} g_opt = {.chunk = -1, .pipeline = 1};
+} g_opt = {.chunk = -1, .pipeline = 1, .att_overlap = ATT_OVL_AUTO};
 
-#define FPGA_REGION_MAP 0x6000000u      /* 96 MiB, see model.c */
+#define FPGA_REGION_MAP 0x8000000u      /* 128 MiB, see model.c */
 
 /* connect the model to the FPGA when requested; 0 on success */
 static int setup_backend(model_t *model)
@@ -47,10 +48,6 @@ static int setup_backend(model_t *model)
     if (!g_opt.fpga)
         return 0;
     if (g_opt.sim) {
-        if (g_opt.fpga_attn) {
-            fprintf(stderr, "--sim simulates the linear engine only; it cannot be combined with --fpga-attn\n");
-            return -1;
-        }
         if (accel_hw_open_sim(&g_opt.hw, FPGA_REGION_MAP) != 0)
             return -1;
     } else if (accel_hw_open(&g_opt.hw, FPGA_REGION_MAP) != 0)
@@ -61,6 +58,7 @@ static int setup_backend(model_t *model)
         model_set_chunk(model, g_opt.chunk);
     model_set_pipeline(model, g_opt.pipeline);
     model_set_cpu_patch(model, g_opt.cpu_patch);
+    model_set_att_overlap(model, g_opt.att_overlap);
     return 0;
 }
 
@@ -600,6 +598,12 @@ int main(int argc, char **argv)
             g_opt.chunk = 0;
         else if (!strcmp(argv[i], "--no-pipeline"))
             g_opt.pipeline = 0;
+        else if (!strcmp(argv[i], "--no-att-overlap"))
+            g_opt.att_overlap = ATT_OVL_OFF;
+        else if (!strcmp(argv[i], "--att-overlap-pack-only"))
+            g_opt.att_overlap = ATT_OVL_PACK_ONLY;
+        else if (!strcmp(argv[i], "--att-overlap-force"))
+            g_opt.att_overlap = ATT_OVL_FORCE;
         else if (!strcmp(argv[i], "--cpu-patch"))
             g_opt.cpu_patch = 1;
         else if (!strcmp(argv[i], "--trace") && i + 1 < argc) {

@@ -16,6 +16,9 @@
 #include "pkg.h"
 
 #define ACCEL_REGION_PHYS 0x30000000u
+/* engine VERSION low half of the bitstream with the output FIFO credit and the clean abort (T37, "h5b"): with it
+ * the softmax unit and the engine can run at the same time without risking an output FIFO overflow. */
+#define ACCEL_HW_VERSION_H5B 2
 
 typedef struct accel_hw {
     int fd;
@@ -23,6 +26,7 @@ typedef struct accel_hw {
     uint8_t *region;
     size_t region_len;
     double mhz;                 /* accelerator clock measured with HEARTBEAT at open */
+    int hw_version;             /* engine VERSION low half: 1 = h5, 2 = h5b (output FIFO credit, clean abort) */
     int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
     struct accel_sim *sim;      /* software engine (accel_hw_open_sim); NULL on the real hardware */
     double t_start;             /* wall time of the last accel_hw_start */

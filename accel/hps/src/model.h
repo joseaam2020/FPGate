@@ -49,6 +49,13 @@ void model_set_chunk(model_t *m, int rows);
  * works on another. 0: every layer runs on all rows before the next starts (the behaviour before the
  * pipeline). Needs model_set_chunk > 0; falls back by itself when something does not fit. */
 void model_set_pipeline(model_t *m, int on);
+/* How the FPGA attention overlaps the heads (set before the first forward). ATT_OVL_OFF (--no-att-overlap): the
+ * sequential attention_fpga. ATT_OVL_AUTO (default): full overlap (softmax, engine and packing at the same time)
+ * only when the engine VERSION is the h5b one (ACCEL_HW_VERSION_H5B), else pack-only with a warning.
+ * ATT_OVL_PACK_ONLY (--att-overlap-pack-only): packing overlaps, but the softmax and the engine never run at the
+ * same time. ATT_OVL_FORCE (--att-overlap-force): full overlap whatever the bitstream (tests only). */
+enum { ATT_OVL_AUTO = 0, ATT_OVL_OFF, ATT_OVL_PACK_ONLY, ATT_OVL_FORCE };
+void model_set_att_overlap(model_t *m, int mode);
 /* 1 (--cpu-patch): keep the patch embedding GEMM on the CPU; default 0 runs it on the engine (RAW32 output). */
 void model_set_cpu_patch(model_t *m, int on);
 /* --trace: record per-image events (engine, ARM steps, idle, softmax, packing) and write them as CSV

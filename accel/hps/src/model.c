@@ -15,7 +15,7 @@
 #define FPGA_A_OFF 0x000000u        /* activations, tile-major */
 #define FPGA_O_OFF 0x800000u        /* outputs, row-major */
 #define FPGA_W_OFF 0x1000000u       /* all packed weights */
-#define FPGA_REGION_LEN 0x6000000u  /* 96 MiB: 16 MiB of buffers + 56 MiB of weights + attention buffers */
+#define FPGA_REGION_LEN 0x8000000u  /* 128 MiB: 16 MiB of buffers + 56 MiB of weights + attention buffers */
 /* attention buffers of one head (offsets from the region base); S and P never leave the DDR3 */
 #define ATT_OFF 0x5000000u
 #define ATT_Q (ATT_OFF + 0x000000u)         /* 128 KiB slot: Q as activations */
@@ -25,6 +25,15 @@
 #define ATT_P (ATT_OFF + 0x560000u)         /* 3 MiB slot: probabilities, activation format */
 #define ATT_C (ATT_OFF + 0x860000u)         /* 1 MiB slot: context [tokens][heads * hd] INT8 */
 #define ATT_END (ATT_OFF + 0x960000u)
+/* overlapped attention: two sets of per-head buffers, set p = head % 2 (Q, K^T, V, S and P as above) */
+#define ATT2_OFF 0x6000000u
+#define ATT2_SET 0xA00000u
+#define ATT2_Q(p) (ATT2_OFF + (p) * ATT2_SET + 0x000000u)
+#define ATT2_K(p) (ATT2_OFF + (p) * ATT2_SET + 0x020000u)
+#define ATT2_V(p) (ATT2_OFF + (p) * ATT2_SET + 0x040000u)
+#define ATT2_S(p) (ATT2_OFF + (p) * ATT2_SET + 0x060000u)
+#define ATT2_P(p) (ATT2_OFF + (p) * ATT2_SET + 0x560000u)
+#define ATT2_END (ATT2_OFF + 2 * ATT2_SET)
 
 #define PL_MAX 8                    /* chunks (and slots) of the pipeline */
 #define PL_AREA 0x800000u           /* size of the activation area and of the output area of the region */
@@ -120,6 +129,7 @@ struct model {
     /* FPGA backend (NULL hw = everything on the CPU) */
     accel_hw_t *hw;
     int check, verbose, max_blocks, fpga_attn;
+    int att_overlap, att_warned;        /* ATT_OVL_* mode and whether the pack-only warning was printed */
     uint8_t *att_stage;                 /* staging for the Q / K^T / V images of one head */
     size_t att_stage_len;
     int8_t *att_chk;                    /* CPU context used by --check */
@@ -144,6 +154,7 @@ struct model {
 };
 
 static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int hd);
+static int attention_fpga_select(model_t *m, const block_t *B, int T, int A, int H, int hd);
 static void pl_free(model_t *m);
 
 static void *xalloc(size_t n)
@@ -830,6 +841,11 @@ static int patch_fpga(model_t *m, const layer_t *L, int rows)
     return 0;
 }
 
+void model_set_att_overlap(model_t *m, int mode)
+{
+    m->att_overlap = mode;
+}
+
 void model_set_cpu_patch(model_t *m, int on)
 {
     m->cpu_patch = on;
@@ -917,7 +933,7 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
         }
 
         if (m->fpga_attn) {
-            TIMED(t_attn, if (attention_fpga(m, B, T, A, H, hd)) return -1);
+            TIMED(t_attn, if (attention_fpga_select(m, B, T, A, H, hd)) return -1);
         } else {
             TIMED(t_attn, attention_int(p, B, m->q8, m->k8, m->v8, T, A, H, hd, m->ctx8));
         }
@@ -1014,7 +1030,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
 /* ---- attention on the FPGA: per head Q.K^T (RAW32) -> softmax unit -> P.V, S and P stay in the DDR3 ---- */
 
 /* --check, head 0 only: the scores and probabilities of rows 0..15 and of the last row against the CPU */
-static size_t att_check_stages(model_t *m, const block_t *B, int T, int A, int NK, int KP, int h, int hd)
+static size_t att_check_stages(model_t *m, const block_t *B, int T, int A, int NK, int KP, int h, int hd, uint32_t s_off,
+                               uint32_t p_off)
 {
     const uint8_t *reg = m->hw->region;
     size_t bad_s = 0, bad_p = 0;
@@ -1030,14 +1047,14 @@ static size_t att_check_stages(model_t *m, const block_t *B, int T, int A, int N
                 s += (int32_t)qi[d] * (int32_t)kj[d];
             S[j] = s;
         }
-        const int32_t *hw_s = (const int32_t *)(reg + ATT_S + (size_t)r * NK * 4);
+        const int32_t *hw_s = (const int32_t *)(reg + s_off + (size_t)r * NK * 4);
         for (int j = 0; j < T; j++)
             bad_s += hw_s[j] != S[j];
         softmax_row_int(m->p, B, S, T, P);
         const int sub = r / 16, i = r % 16;
         for (int k = 0; k < KP; k++) {
-            const uint8_t hi = reg[ATT_P + (size_t)sub * 2 * KP * 16 + (size_t)k * 16 + i];
-            const uint8_t lo = reg[ATT_P + (size_t)sub * 2 * KP * 16 + (size_t)KP * 16 + (size_t)k * 16 + i];
+            const uint8_t hi = reg[p_off + (size_t)sub * 2 * KP * 16 + (size_t)k * 16 + i];
+            const uint8_t lo = reg[p_off + (size_t)sub * 2 * KP * 16 + (size_t)KP * 16 + (size_t)k * 16 + i];
             const uint16_t got = (uint16_t)((hi << 8) | lo);
             bad_p += got != (k < T ? P[k] : 0);
         }
@@ -1058,6 +1075,7 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
     const int subs = (T + 15) / 16;
     const int spp_s = subs < 255 ? subs : 255;
     const int spp_pv = 16384 / (2 * KP) < 255 ? 16384 / (2 * KP) : 255;
+    accel_sm_sim_ctx_t sctx = {.pkg = m->p, .block = B};     /* used by the software model only */
     for (int h = 0; h < H; h++) {
         double t0 = now_s();
         size_t n;
@@ -1087,7 +1105,8 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
 
         accel_sm_op_t sm_op = {.rows = (uint32_t)T, .cols = (uint32_t)T, .kp = (uint32_t)KP,
                                .s_phys = ACCEL_REGION_PHYS + ATT_S, .s_stride = (uint32_t)NK * 4,
-                               .p_phys = ACCEL_REGION_PHYS + ATT_P, .m0 = (uint32_t)B->sm_m0, .sh = (int)B->sm_sh};
+                               .p_phys = ACCEL_REGION_PHYS + ATT_P, .m0 = (uint32_t)B->sm_m0, .sh = (int)B->sm_sh,
+                               .sim_ctx = &sctx};
         if (accel_hw_run_sm(hw, &sm_op, &st, 60.0) != 0)
             return -1;
         m->st.att_cyc_sm += st.cycles;
@@ -1096,7 +1115,7 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
             tr_add("sm", "softmax", h, t2, t3, st.cycles);
 
         if (m->check && h == 0)
-            m->st.att_mismatches += att_check_stages(m, B, T, A, NK, KP, h, hd);
+            m->st.att_mismatches += att_check_stages(m, B, T, A, NK, KP, h, hd, ATT_S, ATT_P);
 
         accel_op_t pv_op = {.M = (uint32_t)T, .N = (uint32_t)hd, .K = (uint32_t)KP, .in_bits = 16, .out_bits = 8,
                             .spp = spp_pv, .a_phys = ACCEL_REGION_PHYS + ATT_P, .w_phys = ACCEL_REGION_PHYS + ATT_V,
@@ -1131,6 +1150,216 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
     return 0;
 }
 
+
+/* ---- attention with the heads overlapped: engine (Q.K^T and P.V), softmax unit and ARM packing at the same time ----
+ * Two sets of buffers (parity h % 2) so the packing and the scores of head h+1 can proceed while head h is still
+ * in the softmax or in P.V. Engine queue: S0, S1, PV0, S2, PV1, ..., S(H-1), PV(H-2), PV(H-1); the softmax runs in
+ * head order. Dependencies (the set of parity p is reused every two heads):
+ *   pack(h) needs PV(h-2) done;  S(h) needs pack(h) and SM(h-2) done;
+ *   SM(h) needs S(h) and PV(h-2) done;  PV(h) needs SM(h) done.
+ * full = 0 (pack-only): the softmax and the engine are never in flight together. */
+
+#define ATT_MAX_HEADS 32
+
+typedef struct { int pv, h; } att_job_t;      /* pv: 0 = scores Q.K^T, 1 = context P.V */
+
+static int attention_fpga_ovl(model_t *m, const block_t *B, int T, int A, int H, int hd, int full)
+{
+    accel_hw_t *hw = m->hw;
+    const int NK = ((T + 15) / 16) * 16;
+    const int KP = (T + 1) & ~1;
+    const int subs = (T + 15) / 16;
+    const int spp_s = subs < 255 ? subs : 255;
+    const int spp_pv = 16384 / (2 * KP) < 255 ? 16384 / (2 * KP) : 255;
+    if (H > ATT_MAX_HEADS) {
+        fprintf(stderr, "model: %d heads, the overlapped attention supports %d\n", H, ATT_MAX_HEADS);
+        return -1;
+    }
+    accel_sm_sim_ctx_t sctx = {.pkg = m->p, .block = B};
+    accel_op_t s_op[ATT_MAX_HEADS], pv_op[ATT_MAX_HEADS];
+    accel_sm_op_t sm_op[ATT_MAX_HEADS];
+    for (int h = 0; h < H; h++) {
+        const int p = h & 1;
+        s_op[h] = (accel_op_t){.M = (uint32_t)T, .N = (uint32_t)NK, .K = (uint32_t)hd, .in_bits = 8, .out_bits = 32,
+                               .spp = spp_s, .a_phys = ACCEL_REGION_PHYS + ATT2_Q(p),
+                               .w_phys = ACCEL_REGION_PHYS + ATT2_K(p), .out_phys = ACCEL_REGION_PHYS + ATT2_S(p),
+                               .raw32 = 1, .stride_out = (uint32_t)NK * 4};
+        sm_op[h] = (accel_sm_op_t){.rows = (uint32_t)T, .cols = (uint32_t)T, .kp = (uint32_t)KP,
+                                   .s_phys = ACCEL_REGION_PHYS + ATT2_S(p), .s_stride = (uint32_t)NK * 4,
+                                   .p_phys = ACCEL_REGION_PHYS + ATT2_P(p), .m0 = (uint32_t)B->sm_m0,
+                                   .sh = (int)B->sm_sh, .sim_ctx = &sctx};
+        pv_op[h] = (accel_op_t){.M = (uint32_t)T, .N = (uint32_t)hd, .K = (uint32_t)KP, .in_bits = 16, .out_bits = 8,
+                                .spp = spp_pv, .a_phys = ACCEL_REGION_PHYS + ATT2_P(p),
+                                .w_phys = ACCEL_REGION_PHYS + ATT2_V(p),
+                                .out_phys = ACCEL_REGION_PHYS + ATT_C + (uint32_t)h * hd, .in_unsigned = 1,
+                                .stride_out = (uint32_t)A};
+    }
+    att_job_t jobs[2 * ATT_MAX_HEADS];
+    int nj = 0;
+    jobs[nj++] = (att_job_t){0, 0};
+    for (int h = 1; h < H; h++) {
+        jobs[nj++] = (att_job_t){0, h};
+        jobs[nj++] = (att_job_t){1, h - 1};
+    }
+    jobs[nj++] = (att_job_t){1, H - 1};
+
+    int packed[ATT_MAX_HEADS] = {0}, s_done[ATT_MAX_HEADS] = {0}, sm_done[ATT_MAX_HEADS] = {0}, pv_done[ATT_MAX_HEADS] = {0};
+    int eng_job = -1, sm_h = -1;        /* in flight: index into jobs / head of the softmax */
+    int eng_next = 0, sm_next = 0, pack_next = 0, n_pv = 0, rc = -1;
+    double eng_t0 = 0, sm_t0 = 0;
+    accel_stat_t st;
+
+    while (n_pv < H) {
+        int progress = 0;
+
+        /* collect what finished */
+        if (eng_job >= 0) {
+            const att_job_t *j = &jobs[eng_job];
+            const accel_op_t *op = j->pv ? &pv_op[j->h] : &s_op[j->h];
+            const int busy = accel_hw_busy(hw);
+            const double now = now_s();
+            if (!busy || now - eng_t0 > 60.0) {
+                eng_job = -1;
+                if (accel_hw_wait(hw, op, &st, busy ? 0.0 : 60.0) != 0)
+                    goto fail;
+                const double t1 = now_s();
+                if (j->pv) {
+                    pv_done[j->h] = 1;
+                    n_pv++;
+                    m->st.att_cyc_pv += st.cycles;
+                    m->st.t_att_pv += t1 - eng_t0;
+                } else {
+                    s_done[j->h] = 1;
+                    m->st.att_cyc_s += st.cycles;
+                    m->st.t_att_s += t1 - eng_t0;
+                }
+                if (g_tr)
+                    tr_add("eng", j->pv ? "att_pv" : "att_s", j->h, eng_t0, t1, st.cycles);
+                progress = 1;
+            }
+        }
+        if (sm_h >= 0) {
+            const int busy = accel_hw_sm_busy(hw);
+            if (!busy || now_s() - sm_t0 > 60.0) {
+                const int h = sm_h;
+                sm_h = -1;
+                if (accel_hw_sm_wait(hw, &sm_op[h], &st, busy ? 0.0 : 60.0) != 0)
+                    goto fail;
+                const double t1 = now_s();
+                sm_done[h] = 1;
+                m->st.att_cyc_sm += st.cycles;
+                m->st.t_att_sm += t1 - sm_t0;
+                if (g_tr)
+                    tr_add("sm", "softmax", h, sm_t0, t1, st.cycles);
+                /* head 0: S and P of set 0 are intact now (S(2) and SM(2) cannot have started yet) */
+                if (m->check && h == 0)
+                    m->st.att_mismatches += att_check_stages(m, B, T, A, NK, KP, 0, hd, ATT2_S(0), ATT2_P(0));
+                progress = 1;
+            }
+        }
+
+        /* launch the next engine job */
+        if (eng_job < 0 && eng_next < nj && (full || sm_h < 0)) {
+            const int pv = jobs[eng_next].pv, h = jobs[eng_next].h;
+            int ok;
+            if (pv)
+                ok = sm_done[h];
+            else
+                ok = packed[h] && (h < 2 || sm_done[h - 2]);
+            if (ok) {
+                if (accel_hw_start(hw, pv ? &pv_op[h] : &s_op[h]) != 0)
+                    goto fail;
+                eng_t0 = now_s();
+                eng_job = eng_next++;
+                progress = 1;
+            }
+        }
+        /* launch the next softmax */
+        if (sm_h < 0 && sm_next < H && (full || eng_job < 0)) {
+            const int h = sm_next;
+            if (s_done[h] && (h < 2 || pv_done[h - 2])) {
+                if (accel_hw_sm_start(hw, &sm_op[h]) != 0)
+                    goto fail;
+                sm_t0 = now_s();
+                sm_h = h;
+                sm_next++;
+                progress = 1;
+            }
+        }
+
+        /* nothing to collect or launch: pack the next head if its buffers are free */
+        if (!progress && pack_next < H && (pack_next < 2 || pv_done[pack_next - 2])) {
+            const int h = pack_next, p = h & 1;
+            const double t0 = now_s();
+            size_t n;
+            n = fpga_acts_bytes(T, hd, 1);
+            fpga_pack_acts8_strided(m->q8 + (size_t)h * hd, T, hd, A, m->att_stage);
+            memcpy(hw->region + ATT2_Q(p), m->att_stage, n);
+            n = fpga_kt_bytes(T, hd);
+            fpga_pack_kt(m->k8 + (size_t)h * hd, T, A, hd, m->att_stage);
+            memcpy(hw->region + ATT2_K(p), m->att_stage, n);
+            n = fpga_v_bytes(hd, KP);
+            fpga_pack_v(m->v8 + (size_t)h * hd, T, A, hd, KP, (int32_t)B->av_m0, (int)B->av_sh, m->att_stage);
+            memcpy(hw->region + ATT2_V(p), m->att_stage, n);
+            const double t1 = now_s();
+            m->st.t_att_pack += t1 - t0;
+            if (g_tr)
+                tr_add("cpu", "att_pack", h, t0, t1, 0);
+            packed[h] = 1;
+            pack_next++;
+        }
+    }
+    rc = 0;
+fail:
+    if (rc != 0) {
+        /* leave both units idle (a wait on a busy unit resets it) */
+        if (eng_job >= 0) {
+            const att_job_t *j = &jobs[eng_job];
+            accel_hw_wait(hw, j->pv ? &pv_op[j->h] : &s_op[j->h], NULL, 0.0);
+        }
+        if (sm_h >= 0)
+            accel_hw_sm_wait(hw, &sm_op[sm_h], NULL, 0.0);
+        return -1;
+    }
+
+    double t5 = now_s();
+    memcpy(m->ctx8, hw->region + ATT_C, (size_t)T * A);
+    m->st.t_att_read += now_s() - t5;
+
+    if (m->check) {
+        const pkg_t *p = m->p;
+        attention_int(p, B, m->q8, m->k8, m->v8, T, A, H, hd, m->att_chk);
+        size_t bad = 0;
+        for (size_t i = 0; i < (size_t)T * A; i++)
+            bad += m->att_chk[i] != m->ctx8[i];
+        m->st.att_mismatches += bad;
+        if (m->verbose || bad)
+            fprintf(stderr, "  fpga attention (overlapped), whole block: context %s (%zu of %zu differ)\n",
+                    bad ? "MISMATCH" : "identical to the CPU", bad, (size_t)T * A);
+    }
+    return 0;
+}
+
+/* choose the attention variant for this bitstream and run it */
+static int attention_fpga_select(model_t *m, const block_t *B, int T, int A, int H, int hd)
+{
+    int mode = m->att_overlap;
+    if (mode == ATT_OVL_OFF)
+        return attention_fpga(m, B, T, A, H, hd);
+    if (mode == ATT_OVL_AUTO) {
+        if (m->hw->hw_version >= ACCEL_HW_VERSION_H5B)
+            mode = ATT_OVL_FORCE;
+        else {
+            if (!m->att_warned)
+                fprintf(stderr, "model: engine VERSION %d has no output FIFO credit: softmax and engine are not "
+                                "overlapped (packing only)\n", m->hw->hw_version);
+            m->att_warned = 1;
+            mode = ATT_OVL_PACK_ONLY;
+        }
+    }
+    return attention_fpga_ovl(m, B, T, A, H, hd, mode == ATT_OVL_FORCE);
+}
+
 int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fpga_attn)
 {
     const pkg_t *p = m->p;
@@ -1150,7 +1379,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
         if (!fpga_supports(L))
             continue;
         const size_t bytes = fpga_weights_bytes(L);
-        if (off + bytes > FPGA_REGION_LEN) {
+        if (off + bytes > ATT_OFF) {
             fprintf(stderr, "model: the packed weights do not fit the reserved region\n");
             free(tile);
             return -1;
@@ -1190,7 +1419,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
             fprintf(stderr, "model: --fpga-attn needs a bitstream with the softmax unit (registers at 0x100)\n");
             return -1;
         }
-        if (ATT_END > FPGA_REGION_LEN || m->tokens > 1040) {
+        if (ATT2_END > FPGA_REGION_LEN || ATT_END > ATT2_OFF || m->tokens > 1040) {
             fprintf(stderr, "model: attention buffers do not fit the region\n");
             return -1;
         }

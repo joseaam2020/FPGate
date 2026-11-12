@@ -105,10 +105,11 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
     h->region = r;
     h->region_len = region_len;
     uint32_t v = rd(h, R_VERSION);
-    if (v != 0x46500001u) {
-        fprintf(stderr, "accel: unexpected VERSION 0x%08x (expected 0x46500001)\n", v);
+    if ((v >> 16) != 0x4650u || ((v & 0xFFFFu) != 1u && (v & 0xFFFFu) != 2u)) {
+        fprintf(stderr, "accel: unexpected VERSION 0x%08x (expected 0x46500001 or 0x46500002)\n", v);
         return -1;
     }
+    h->hw_version = (int)(v & 0xFFFFu);
     wr(h, R_CTRL, CTRL_RESET_SOFT);
     wr(h, R_CTRL, CTRL_CLEAR_ERR);
     {
@@ -118,7 +119,10 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
         uint32_t h1 = rd(h, R_HEARTBEAT);
         h->mhz = (uint32_t)(h1 - h0) / ((now_s() - t0) * 1e6);
     }
-    h->has_softmax = rd(h, SM_VERSION) == 0x534D0001u;
+    {
+        uint32_t sv = rd(h, SM_VERSION);
+        h->has_softmax = (sv == 0x534D0001u || sv == 0x534D0002u);
+    }
     if (h->has_softmax) {
         wr(h, SM_CTRL, CTRL_RESET_SOFT);
         wr(h, SM_CTRL, CTRL_CLEAR_ERR);

@@ -20,7 +20,7 @@ run() { # name, options
     echo "ran $name: $got logits lines (exit $rc)"
 }
 run base --no-overlap --no-pipeline
-for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--chunk 512" "pipe48:--chunk 48" "cpupatch:--cpu-patch"; do
+for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--chunk 512" "pipe48:--chunk 48" "cpupatch:--cpu-patch" "attn_seq:--fpga-attn --no-att-overlap" "attn_ovl:--fpga-attn" "attn_pack:--fpga-attn --att-overlap-pack-only"; do
     name=${mode%%:*}; opts=${mode#*:}
     run "$name" $opts
     if ! cmp -s "$tmp/base.logits" "$tmp/$name.logits"; then
