@@ -1412,7 +1412,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     m->check = check;
     m->verbose = verbose;
     m->a_ok = 0;
-    m->chunk_rows = 256;
+    m->chunk_rows = 192;
     m->pipeline = 1;
     if (fpga_attn) {
         if (!hw->has_softmax) {
