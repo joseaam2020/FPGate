@@ -10,7 +10,7 @@ Dos programas, ambos estáticos con musl y para correr como root en el HPS:
 Desde la raíz del repositorio, en PowerShell:
 
 ```
-docker run --rm -v "${PWD}/accel/tools/board:/src" -w /src fpgate-proxy-dev arm-linux-musleabihf-gcc -O2 -Wall -static accel_test.c -o accel_test
+docker run --rm -v "${PWD}:/repo" -w /repo/accel/tools/board fpgate-proxy-dev arm-linux-musleabihf-gcc -std=gnu11 -O2 -Wall -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard -ffp-contract=off -fopenmp -static -I../../hps/src -I../../../proxy/src accel_test.c ../../hps/src/accel_drv.c ../../hps/src/accel_sim.c ../../hps/src/fpga_pack.c ../../hps/src/ops.c ../../hps/src/pkg.c ../../hps/src/sha256.c -lm -pthread -o accel_test
 ```
 
 ## Datos de prueba (en el PC)

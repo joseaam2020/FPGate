@@ -7,6 +7,8 @@
  *   accel_test faults DIR [--bad-addr] error injection on a small layer; --bad-addr also points
  *                                      the DMA outside the SDRAM (expects a read timeout)
  *   accel_test all DIR [DIR...]        regs + mem + layers + faults (on the first DIR)
+ *   accel_test concurrent [rows]       scores engine and softmax unit alone, then at the same time, then at
+ *                                      the same time with a memcpy thread (default rows 1025; try 32 first)
  *
  * A layer directory holds params6.txt or params.txt ("M N K IN_BITS OUT_BITS [SPP]"), mem_a.bin
  * (tile-major activations), mem_w.bin (weight tiles with epilogue constants) and y.bin (expected
@@ -23,6 +25,10 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+
+#include "accel_drv.h"
+#include "fpga_pack.h"
 
 #define LW_BASE      0xFF200000u
 #define LW_LEN       0x1000u
@@ -389,12 +395,191 @@ static void test_faults(const char *dir, int bad_addr)
     free_layer(&L);
 }
 
+/* ---- concurrent: engine (scores S = Q K^T, RAW32) and softmax unit at the same time ----
+ * Everything lives in the window 0x30000000 + [0x6000000, 0x8000000). Fixed softmax constants: scores are
+ * random in [-30000, 30000), so idx = (d * M0) >> SH with M0 / 2^SH = 1/64 spans the 1025-entry exp table. */
+#define C_OFF   0x6000000u
+#define C_Q     (C_OFF + 0x000000u)       /* Q, 128 KiB slot */
+#define C_K     (C_OFF + 0x020000u)       /* K^T tiles, 128 KiB slot */
+#define C_SIN   (C_OFF + 0x040000u)       /* synthetic scores for the softmax unit, 5 MiB slot */
+#define C_ES    (C_OFF + 0x540000u)       /* engine output S: 3 slots (alone, conc, conc+memcpy) of 5 MiB */
+#define C_P     (C_OFF + 0xC40000u)       /* softmax output P: 3 slots of 3 MiB */
+#define C_MC    (C_OFF + 0x1600000u)      /* memcpy destination, 4 MiB (ends at 0x1A00000 < 0x2000000) */
+#define C_ES_SZ 0x500000u
+#define C_P_SZ  0x300000u
+#define C_MC_SZ 0x400000u
+#define C_SM_M0 (1u << 20)
+#define C_SM_SH 26
+
+static uint32_t rng_state = 12345u;
+static uint32_t rng(void)
+{
+    rng_state = rng_state * 1664525u + 1013904223u;
+    return rng_state >> 8;
+}
+
+static volatile int mc_stop;
+static struct { uint8_t *dst, *src; double bytes, t; } mc;
+
+static void *memcpy_thread(void *arg)
+{
+    (void)arg;
+    double t0 = now_ms();
+    mc.bytes = 0;
+    do {
+        memcpy(mc.dst, mc.src, C_MC_SZ);
+        mc.bytes += C_MC_SZ;
+    } while (!mc_stop);
+    mc.t = now_ms() - t0;
+    return NULL;
+}
+
+/* starts the selected units back to back, waits for all of them; optionally with the memcpy thread running */
+static int conc_run(accel_hw_t *hw, const accel_op_t *eo, const accel_sm_op_t *so, int do_e, int do_s,
+                    int with_mc, accel_stat_t *es, accel_stat_t *ss, double *mcmbs)
+{
+    pthread_t th;
+    if (with_mc) {
+        mc_stop = 0;
+        if (pthread_create(&th, NULL, memcpy_thread, NULL) != 0)
+            return -1;
+    }
+    int rc = 0;
+    if (do_e && accel_hw_start(hw, eo) != 0)
+        rc = -1;
+    if (rc == 0 && do_s && accel_hw_sm_start(hw, so) != 0)
+        rc = -1;
+    if (do_e && accel_hw_wait(hw, eo, es, 60.0) != 0)
+        rc = -1;
+    if (do_s && accel_hw_sm_wait(hw, so, ss, 60.0) != 0)
+        rc = -1;
+    if (with_mc) {
+        mc_stop = 1;
+        pthread_join(th, NULL);
+        *mcmbs = mc.bytes / 1048576.0 / (mc.t / 1000.0);
+    }
+    return rc;
+}
+
+static int test_concurrent(int rows)
+{
+    const int hd = 64;
+    const int NK = ((rows + 15) / 16) * 16, KP = (rows + 1) & ~1;
+    const int spp_s = (NK / 16) < 255 ? NK / 16 : 255;
+    accel_hw_t hw;
+    if (rows < 1 || rows > 1025) {
+        fprintf(stderr, "rows must be in 1..1025\n");
+        return 2;
+    }
+    if (accel_hw_open(&hw, 0x8000000u) != 0)
+        return 2;
+    if (!hw.has_softmax) {
+        fprintf(stderr, "this bitstream has no softmax unit\n");
+        return 2;
+    }
+
+    int8_t *q = malloc((size_t)rows * hd), *k = malloc((size_t)rows * hd);
+    int32_t *sin_ = malloc((size_t)rows * NK * 4);
+    uint8_t *stage = malloc(C_ES_SZ), *a = malloc(C_ES_SZ), *b = malloc(C_ES_SZ);
+    mc.src = malloc(C_MC_SZ);
+    mc.dst = hw.region + C_MC;
+    if (!q || !k || !sin_ || !stage || !a || !b || !mc.src) {
+        perror("malloc");
+        return 2;
+    }
+    for (int i = 0; i < rows * hd; i++) {
+        q[i] = (int8_t)(rng() % 255 - 127);
+        k[i] = (int8_t)(rng() % 255 - 127);
+    }
+    for (int i = 0; i < rows * NK; i++)
+        sin_[i] = (int32_t)(rng() % 60000) - 30000;
+    for (size_t i = 0; i < C_MC_SZ; i++)
+        mc.src[i] = (uint8_t)rng();
+
+    size_t n = fpga_acts_bytes(rows, hd, 1);
+    fpga_pack_acts8_strided(q, rows, hd, hd, stage);
+    memcpy(hw.region + C_Q, stage, n);
+    n = fpga_kt_bytes(rows, hd);
+    fpga_pack_kt(k, rows, hd, hd, stage);
+    memcpy(hw.region + C_K, stage, n);
+    memcpy(hw.region + C_SIN, sin_, (size_t)rows * NK * 4);
+
+    const size_t es_bytes = (size_t)rows * NK * 4, p_bytes = fpga_acts_bytes(rows, KP, 2);
+    accel_op_t eo[3];
+    accel_sm_op_t so[3];
+    for (int i = 0; i < 3; i++) {
+        eo[i] = (accel_op_t){.M = (uint32_t)rows, .N = (uint32_t)NK, .K = hd, .in_bits = 8, .out_bits = 32,
+                             .spp = spp_s, .a_phys = REGION_PHYS + C_Q, .w_phys = REGION_PHYS + C_K,
+                             .out_phys = REGION_PHYS + C_ES + i * C_ES_SZ, .raw32 = 1,
+                             .stride_out = (uint32_t)NK * 4};
+        so[i] = (accel_sm_op_t){.rows = (uint32_t)rows, .cols = (uint32_t)rows, .kp = (uint32_t)KP,
+                                .s_phys = REGION_PHYS + C_SIN, .s_stride = (uint32_t)NK * 4,
+                                .p_phys = REGION_PHYS + C_P + i * C_P_SZ, .m0 = C_SM_M0, .sh = C_SM_SH};
+    }
+    accel_stat_t e_alone = {0}, s_alone = {0}, e_c = {0}, s_c = {0}, e_d = {0}, s_d = {0};
+    double mb_d = 0;
+    int rc = 0;
+    /* output slots start with a known pattern so an unwritten byte cannot match by luck */
+    memset(stage, 0xA5, C_ES_SZ);
+    for (int i = 0; i < 3; i++) {
+        memcpy(hw.region + C_ES + i * C_ES_SZ, stage, es_bytes);
+        memcpy(hw.region + C_P + i * C_P_SZ, stage, p_bytes);
+    }
+    double t0 = now_ms();
+    rc |= conc_run(&hw, &eo[0], &so[0], 1, 0, 0, &e_alone, NULL, NULL);    /* (a) S alone */
+    double ta = now_ms() - t0;
+    t0 = now_ms();
+    rc |= conc_run(&hw, &eo[0], &so[0], 0, 1, 0, NULL, &s_alone, NULL);    /* (b) softmax alone */
+    double tb = now_ms() - t0;
+    t0 = now_ms();
+    rc |= conc_run(&hw, &eo[1], &so[1], 1, 1, 0, &e_c, &s_c, NULL);        /* (c) both */
+    double tc = now_ms() - t0;
+    t0 = now_ms();
+    rc |= conc_run(&hw, &eo[2], &so[2], 1, 1, 1, &e_d, &s_d, &mb_d);       /* (d) both + memcpy */
+    double td = now_ms() - t0;
+    if (rc) {
+        fprintf(stderr, "an operation failed\n");
+        return 1;
+    }
+
+    /* (a) and (b) wrote slot 0; (c) slot 1; (d) slot 2 */
+    int same_c = 1, same_d = 1;
+    memcpy(a, hw.region + C_ES, es_bytes);
+    memcpy(b, hw.region + C_ES + 1 * C_ES_SZ, es_bytes);
+    same_c &= !memcmp(a, b, es_bytes);
+    memcpy(b, hw.region + C_ES + 2 * C_ES_SZ, es_bytes);
+    same_d &= !memcmp(a, b, es_bytes);
+    memcpy(a, hw.region + C_P, p_bytes);
+    memcpy(b, hw.region + C_P + 1 * C_P_SZ, p_bytes);
+    same_c &= !memcmp(a, b, p_bytes);
+    memcpy(b, hw.region + C_P + 2 * C_P_SZ, p_bytes);
+    same_d &= !memcmp(a, b, p_bytes);
+
+    const double mb = 1048576.0;
+    printf("  rows %d: S alone %.2f ms rd %u wr %u; SM alone %.2f ms rd %u wr %u; both %.2f ms; both+memcpy %.2f ms\n",
+           rows, ta, e_alone.bytes_rd, e_alone.bytes_wr, tb, s_alone.bytes_rd, s_alone.bytes_wr, tc, td);
+    printf("RESULT conc: S %llu alone / %llu conc / %llu conc+memcpy; SM %llu alone / %llu conc / %llu conc+memcpy; "
+           "MB/s engine+SM alone %.1f, conc %.1f, conc+memcpy %.1f, memcpy thread %.1f; outputs %s\n",
+           (unsigned long long)e_alone.cycles, (unsigned long long)e_c.cycles, (unsigned long long)e_d.cycles,
+           (unsigned long long)s_alone.cycles, (unsigned long long)s_c.cycles, (unsigned long long)s_d.cycles,
+           (e_alone.bytes_rd + e_alone.bytes_wr + s_alone.bytes_rd + s_alone.bytes_wr) / mb / ((ta + tb) / 1000.0),
+           (e_c.bytes_rd + e_c.bytes_wr + s_c.bytes_rd + s_c.bytes_wr) / mb / (tc / 1000.0),
+           (e_d.bytes_rd + e_d.bytes_wr + s_d.bytes_rd + s_d.bytes_wr) / mb / (td / 1000.0), mb_d,
+           same_c && same_d ? "identical" : "DIFFER");
+    if (!same_c || !same_d)
+        printf("  DIFFER: conc %s, conc+memcpy %s\n", same_c ? "ok" : "differs", same_d ? "ok" : "differs");
+    accel_hw_close(&hw);
+    return (same_c && same_d) ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s regs | mem | layer DIR... | faults DIR [--bad-addr] | all DIR...\n", argv[0]);
+        fprintf(stderr, "usage: %s regs | mem | layer DIR... | faults DIR [--bad-addr] | all DIR... | concurrent [rows]\n", argv[0]);
         return 2;
     }
+    if (!strcmp(argv[1], "concurrent"))
+        return test_concurrent(argc > 2 ? atoi(argv[2]) : 1025);
     int fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (fd < 0) {
         perror("open /dev/mem (run as root)");
