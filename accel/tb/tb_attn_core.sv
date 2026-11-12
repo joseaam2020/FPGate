@@ -33,6 +33,7 @@ module tb_attn_core;
   logic [255:0] rd_readdata, wr_writedata, rd2_readdata, wr2_writedata;
 
   fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4)) dut (.*);
+  cyc_mon mon();
 
   avalon_mem_model #(.DEPTH(DEPTH)) m_er (
     .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),
@@ -107,8 +108,10 @@ module tb_attn_core;
     wr(32'h020, A_Q); wr(32'h024, W_K); wr(32'h028, S_OUT); wr(32'h04C, 1040 * 4);
     wr(32'h014, R); wr(32'h018, 1040); wr(32'h01C, 64);
     wr(32'h010, {16'b0, 8'd2, 4'b0, 4'b1010});               // spp 2, raw32, signed, 8-bit planes
+    mon.start();
     wr(32'h004, 32'h1);
     wait_done("scores", 32'h008, 400000);
+    mon.report($sformatf("S_%0drows", R));
     rd(32'h038, v); $display("    scores: %0d cycles", v);
     for (int i = 0; i < R * 130; i++) m_sr.mem[S_OUT / 32 + i] = m_ew.mem[S_OUT / 32 + i];
 
@@ -116,8 +119,10 @@ module tb_attn_core;
     wr(32'h110, R); wr(32'h114, 1025); wr(32'h118, KP);
     wr(32'h11C, S_OUT); wr(32'h120, 1040 * 4); wr(32'h124, P_OUT);
     wr(32'h128, 32'(m0v)); wr(32'h12C, 32'(shv));
+    mon.start();
     wr(32'h104, 32'h1);
     wait_done("softmax", 32'h108, 400000);
+    mon.report($sformatf("softmax_%0drows", R));
     rd(32'h130, v); $display("    softmax: %0d cycles", v);
     for (int i = 0; i < ((R + 15) / 16) * KP; i++) m_er.mem[P_OUT / 32 + i] = m_sw.mem[P_OUT / 32 + i];
 
@@ -125,8 +130,10 @@ module tb_attn_core;
     wr(32'h020, P_OUT); wr(32'h024, W_V); wr(32'h028, CTX); wr(32'h04C, 64);
     wr(32'h014, R); wr(32'h018, 64); wr(32'h01C, KP);
     wr(32'h010, {16'b0, 8'd2, 4'b0, 4'b0001});               // spp 2, 16-bit unsigned input, 8-bit output
+    mon.start();
     wr(32'h004, 32'h1);
     wait_done("context", 32'h008, 400000);
+    mon.report($sformatf("PV_%0drows", R));
     rd(32'h038, v); $display("    context: %0d cycles", v);
 
     bad = 0;
