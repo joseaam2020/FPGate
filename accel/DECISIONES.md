@@ -420,3 +420,26 @@ Empieza después de la etiqueta `accel-pre-tuberia` (último commit con el solap
 **Revisión (a mano y con `/code-review`) del código que solo corre en la placa.** La secuencia de registros de arranque y de espera es la misma que ya funcionó (`accel_test.c`); M=1 y M aleatorio de 1 a 70 ya estaban simulados en `tb_gemm_engine` y el panel de una fila ya existía en la placa (1025 = 4·256 + 1); los huecos por trozo están alineados a 64 bytes y caben en las áreas de la región; el planificador no puede interbloquearse. Cambios que salieron de la revisión: `accel_hw_start` falla si ya hay una operación en vuelo (en hardware real un segundo `START` reiniciaría el motor a mitad de la operación y se perdería el primer resultado; solo el simulador lo comprobaba), lectura de confirmación del estado justo tras `START`, aviso por `stderr` cuando la tubería se desactiva sola (capa fuera de la FPGA o demasiados trozos), etiquetas del resumen que no confunden en modo tubería, y el test `test_sim.sh` ya no da "PASS" si el binario se cae. Anotado y sin hacer: la lógica de preparar la operación, empaquetar y leer está repetida en los tres caminos (`linear_fpga_seq`, `linear_fpga_chunked` y la tubería); unificarla es una refactorización que arriesga lo ya verificado, y se deja para cuando haya tiempos reales.
 
 **Prueba con el proxy real (`make test-proxy`, en `accel/hps`).** Las 20 imágenes de referencia se reconstruyen a partir de sus tensores (la normalización uint8→float es exacta), se sirven por HTTP, pasan por el proxy real (`proxy/build/native/fpgate-proxy`) y las juzga `fpgate-accel` real. Se compara el veredicto del proxy con la decisión de referencia, el score con el de la referencia (±0.01), y que la imagen bloqueada vuelva sustituida y la permitida intacta. Resultado con 6 imágenes (4 NSFW, 2 SFW): **todas correctas** con el backend de CPU, con el motor simulado y la tubería, y con el motor simulado sin tubería; sin fallos del acelerador en el log del proxy. Scores del proxy iguales a la referencia a 3 decimales. Tiempos de esta prueba (PC, no placa): 2 s con la CPU, 8 s con el motor simulado. La prueba también confirma que el contrato del socket (448×448 RGB8, una imagen a la vez) funciona con el proxy real y no solo con el simulador `mock_accel`.
+
+## Medición en la placa de la optimización del ARM y del solapamiento (2026-11-11)
+
+Bitstream de 120 MHz, imagen 0, `--fpga --fpga-attn`. Logits idénticos en los tres modos (diferencia máxima con la referencia 0.02312), decisión igual. La comprobación por capa del bloque 0 (`--check --blocks 1`) da "every output identical to the CPU" tanto en el camino secuencial (7 operaciones) como con la tubería (35 operaciones, 5 trozos por capa): **el nuevo manejo asíncrono del motor y el trabajo del ARM en paralelo funcionan en el hardware real**.
+
+| Etapa (s) | Antes (14.2 s) | `--no-overlap` | `--no-pipeline` | tubería (por defecto) |
+|---|---|---|---|---|
+| Atención (FPGA 1.92 + ARM) | 2.30 | 2.22 | 2.23 | 2.22 |
+| `patch_embed` | 1.02 | 0.49 | 0.49 | 0.49 |
+| LayerNorm | 1.59 | 0.82 | 0.82 | dentro de la tubería |
+| Cuantizar | 2.40 | 1.17 | 1.17 | dentro de la tubería |
+| SwiGLU | 1.05 | 0.45 | 0.46 | dentro de la tubería |
+| RoPE | 0.54 | 0.27 | 0.27 | dentro de la tubería |
+| Capas lineales (motor + empaquetar + leer) | 4.62 | 4.24 | 3.04 | dentro de la tubería |
+| **Tubería entre atenciones (pared)** | – | – | – | **4.93** |
+| Total | **14.2** | **10.0** | **8.8** | **7.7** |
+
+Detalle de la tubería: motor 2.62 s (314 M ciclos), ARM ocupado 4.47 s (LayerNorm 0.84, cuantizar 1.18, empaquetar 0.65, leer 0.83, SwiGLU 0.45, RoPE 0.30, otros 0.22), el ARM espera al motor solo 0.46 s. **El tramo está limitado por el ARM, no por la FPGA.** El trabajo del ARM no se enlentece por compartir la DDR3 con el motor (empaquetar y leer salen casi iguales que sin solapar).
+
+**Dónde queda margen (estimaciones, sin medir):**
+- Cuantizar tarda 1.18 s, ≈ 26 ns por elemento: es la parte más lenta para lo que hace. `truncf` es una llamada de biblioteca en ARMv7 y el bucle no usa NEON. Con NEON podría bajar a ≈ 0.3 s.
+- Leer y empaquetar (1.5 s en total) están limitados por el ancho de banda de la región no cacheable.
+- La atención (2.2 s) corre sola: durante ella el ARM está parado. Hacer la atención por trozos de filas de consulta (todas las cabezas por trozo) permitiría que la tubería arranque con el trozo 0 mientras el motor sigue con el 1; el total se acercaría a max(FPGA ≈ 4.5 s, ARM ≈ 5 s) en lugar de la suma. Es un cambio grande.
