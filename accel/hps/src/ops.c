@@ -174,6 +174,30 @@ void epilogue_int(const int32_t *acc, int M, int N, const int32_t *bias, const i
         }
 }
 
+#ifndef LN_EXACT_DIV
+/* a / den, bit-identical to the IEEE division. t = a * rden is a candidate; the residual
+ * e = a - t * den is exact in double (24 x 24 bit product, and a ~ t * den so the subtraction
+ * is exact). t is the correctly rounded quotient when |e| < half the distance from t to its
+ * nearest neighbour times den (strict: ties and anything doubtful use the real division). */
+static inline float ln_div(float a, float den, float rden)
+{
+    const float t = a * rden;
+    uint32_t u;
+    memcpy(&u, &t, sizeof u);
+    const uint32_t E = (u >> 23) & 0xff;
+    if (E <= 24 || E == 255)
+        return a / den; /* zero, subnormal, tiny, inf, nan */
+    /* spacing below t is half the spacing above when t is a power of two */
+    const uint32_t Ep = (u & 0x7fffff) ? E : E - 1;
+    const uint32_t hb = (Ep - 24) << 23; /* 2^(Ep-127-24) = half ulp, as float bits */
+    float half;
+    memcpy(&half, &hb, sizeof half);
+    const double e = (double)a - (double)t * (double)den;
+    const double lim = (double)half * (double)den;
+    return (e < lim && e > -lim) ? t : a / den;
+}
+#endif
+
 void layer_norm(const float *x, int rows, int d, const float *g, const float *b, double eps, float *y)
 {
     const float epsf = (float)eps;
@@ -204,8 +228,14 @@ void layer_norm(const float *x, int rows, int d, const float *g, const float *b,
         }
         const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
         const float den = sqrtf(var + epsf);
+#ifdef LN_EXACT_DIV
         for (int k = 0; k < d; k++) {
             float t = (xr[k] - mu) / den;
+#else
+        const float rden = 1.0f / den;
+        for (int k = 0; k < d; k++) {
+            float t = ln_div(xr[k] - mu, den, rden);
+#endif
             t = t * g[k];
             yr[k] = t + b[k];
         }
