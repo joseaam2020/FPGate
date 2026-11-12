@@ -131,6 +131,7 @@ struct model {
     int a_ok, a_rows, a_k, a_bits;      /* activations currently packed in the region */
     int chunk_rows;                     /* rows per engine operation when overlapping ARM and FPGA; 0 = sequential */
     /* row-chunk pipeline (see model_set_pipeline); buffers are per chunk, sized for chunk_rows rows */
+    int cpu_patch;                      /* --cpu-patch: patch embedding on the CPU even with the engine */
     int pipeline, pl_cap, pl_ok;
     size_t pl_slot;                     /* bytes of each chunk's slot in the region's activation and output areas */
     float *pl_n[PL_MAX];                /* LayerNorm output / float input of the next layer */
@@ -789,6 +790,51 @@ static int pl_after_attention(model_t *m, int bi, int nb)
     return pl_run(m, s, n);
 }
 
+/* Patch embedding GEMM on the engine: INT8 input from m->a8, raw INT32 accumulators (no bias, no epilogue) into
+ * m->acc. Returns 0 when it ran on the engine; -1 when it did not (no FPGA, --cpu-patch, not packed, or an engine
+ * error) and the caller must run gemm_s8. With --check it also computes the CPU accumulators and counts differences. */
+static int patch_fpga(model_t *m, const layer_t *L, int rows)
+{
+    const size_t wi = (size_t)(L - m->p->layers);
+    if (!m->hw || m->cpu_patch || !m->w_off[wi])
+        return -1;
+    const int K = L->in, N = L->out;
+    const size_t n = (size_t)rows * N;
+    if (fpga_acts_bytes(rows, K, 1) > m->stage_len || n * 4 > FPGA_W_OFF - FPGA_O_OFF)
+        return -1;
+    fpga_pack_acts8(m->a8, rows, K, m->stage);
+    memcpy(m->hw->region + FPGA_A_OFF, m->stage, fpga_acts_bytes(rows, K, 1));
+    m->a_ok = 0;
+    accel_op_t op = {.M = (uint32_t)rows, .N = (uint32_t)N, .K = (uint32_t)K, .in_bits = 8, .out_bits = 32,
+                     .spp = 16, .a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF, .w_phys = ACCEL_REGION_PHYS + m->w_off[wi],
+                     .out_phys = ACCEL_REGION_PHYS + FPGA_O_OFF, .raw32 = 1, .stride_out = (uint32_t)N * 4};
+    accel_stat_t st;
+    if (accel_hw_run(m->hw, &op, &st, 60.0) != 0)
+        return -1;
+    memcpy(m->acc, m->hw->region + FPGA_O_OFF, n * 4);
+    m->st.ops++;
+    m->st.cycles += st.cycles;
+    if (m->check) {
+        int32_t *ref = xalloc(n * sizeof *ref);
+        gemm_s8(m->a8, L->w, ref, rows, N, K);
+        size_t bad = 0;
+        for (size_t i = 0; i < n; i++)
+            bad += ref[i] != m->acc[i];
+        free(ref);
+        m->st.mismatches += bad;
+        if (bad)
+            fprintf(stderr, "  *** patch_embed: %zu of %zu accumulators differ from the CPU result\n", bad, n);
+        else if (m->verbose)
+            fprintf(stderr, "  fpga patch_embed M=%d N=%d K=%d: identical to CPU\n", rows, N, K);
+    }
+    return 0;
+}
+
+void model_set_cpu_patch(model_t *m, int on)
+{
+    m->cpu_patch = on;
+}
+
 int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn dbg, void *dbg_ctx)
 {
     const pkg_t *p = m->p;
@@ -813,7 +859,8 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     {
         const layer_t *L = p->patch_embed;
         quantize_f32(m->cols, (size_t)NP * ps, L->s_x, 8, m->a8);
-        gemm_s8(m->a8, L->w, m->acc, NP, L->out, L->in);
+        if (patch_fpga(m, L, NP) != 0)
+            gemm_s8(m->a8, L->w, m->acc, NP, L->out, L->in);
 #pragma omp parallel for schedule(static)
         for (int t = 0; t < NP; t++)
             for (int c = 0; c < D; c++) {

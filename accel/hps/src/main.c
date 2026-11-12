@@ -33,6 +33,7 @@ static struct {
     int sim;                    /* software engine instead of the FPGA (tests on a PC) */
     int chunk;                  /* rows per engine operation, -1 = model default, 0 = no overlap */
     int pipeline;               /* row-chunk pipeline between attentions */
+    int cpu_patch;              /* patch embedding on the CPU instead of the engine */
     int logits;                 /* print the logits with 9 digits (compare two runs bit by bit) */
     accel_hw_t hw;
 } g_opt = {.chunk = -1, .pipeline = 1};
@@ -59,6 +60,7 @@ static int setup_backend(model_t *model)
     if (g_opt.chunk >= 0)
         model_set_chunk(model, g_opt.chunk);
     model_set_pipeline(model, g_opt.pipeline);
+    model_set_cpu_patch(model, g_opt.cpu_patch);
     return 0;
 }
 
@@ -598,6 +600,8 @@ int main(int argc, char **argv)
             g_opt.chunk = 0;
         else if (!strcmp(argv[i], "--no-pipeline"))
             g_opt.pipeline = 0;
+        else if (!strcmp(argv[i], "--cpu-patch"))
+            g_opt.cpu_patch = 1;
         else if (!strcmp(argv[i], "--trace") && i + 1 < argc) {
             if (model_trace_open(argv[++i]) != 0) {
                 fprintf(stderr, "--trace: out of memory\n");

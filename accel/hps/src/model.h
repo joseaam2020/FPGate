@@ -38,7 +38,8 @@ struct accel_hw;
 /* fpga_attn: also run the attention (Q.K^T, softmax, P.V) on the FPGA; needs the softmax unit in the bitstream.
  * Run the linear layers on the FPGA: packs all weights into the reserved DDR3 region (once) and sends
  * every INT GEMM that the engine supports to it. check: also compute each layer on the CPU and count
- * differences. Returns 0 on success. patch_embed and the head stay on the CPU. */
+ * differences. Returns 0 on success. patch_embed runs on the engine too (see model_set_cpu_patch); the head
+ * stays on the CPU. */
 int model_attach_fpga(model_t *m, struct accel_hw *hw, int check, int verbose, int fpga_attn);
 /* rows per engine operation for the overlapped linear layers (rounded up to a multiple of 16);
  * 0 = no overlap: the ARM waits for every operation (the behaviour before overlapping). Default 256. */
@@ -48,6 +49,8 @@ void model_set_chunk(model_t *m, int rows);
  * works on another. 0: every layer runs on all rows before the next starts (the behaviour before the
  * pipeline). Needs model_set_chunk > 0; falls back by itself when something does not fit. */
 void model_set_pipeline(model_t *m, int on);
+/* 1 (--cpu-patch): keep the patch embedding GEMM on the CPU; default 0 runs it on the engine (RAW32 output). */
+void model_set_cpu_patch(model_t *m, int on);
 /* --trace: record per-image events (engine, ARM steps, idle, softmax, packing) and write them as CSV
  * t0,t1,kind,name,block,idx,cycles after each model_forward (path, path.1, path.2, ...). 0 on success. */
 int model_trace_open(const char *path);
