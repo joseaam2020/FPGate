@@ -37,6 +37,8 @@ test-kernels: $(wildcard src/*.c) $(wildcard tests/*.c)
 	  $(NATCC) tests/$$t.c $$S -lm -o build/native/$$t; echo "== native $$t"; build/native/$$t; \
 	  $(ARMCC) tests/$$t.c $$S -lm -o build/arm/$$t; echo "== arm $$t"; qemu-arm build/arm/$$t; \
 	done
+	$(NATCC) -pthread tests/test_sim_attn.c src/accel_sim.c src/accel_drv.c src/fpga_pack.c src/ops.c src/pkg.c src/sha256.c -lm -o build/native/test_sim_attn
+	echo "== native test_sim_attn"; build/native/test_sim_attn $(PKG) pkg/e1_r7.idx
 
 # Overlap and pipeline tests on the software engine (--sim): all modes give the same logits as the
 # sequential one and every layer equals the CPU result. Chunk 48 gives 22 chunks: more than the pipeline

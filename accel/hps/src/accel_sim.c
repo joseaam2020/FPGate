@@ -18,6 +18,7 @@
 
 #define SIM_MACS_PER_S 25.0e9       /* about the engine: 256 MAC per cycle at 100 MHz */
 #define SIM_SLICES 8
+#define SIM_SM_ELEMS_PER_S 100.0e6  /* about the softmax unit: one score per cycle at 100 MHz */
 
 struct accel_sim {
     pthread_t th;
@@ -27,6 +28,14 @@ struct accel_sim {
     int failed;
     uint64_t cycles;
     accel_hw_t *hw;
+    /* softmax unit: its own thread and state, so it can run while the engine does */
+    pthread_t sm_th;
+    int sm_running;
+    volatile int sm_done;
+    accel_sm_op_t sm_op;
+    accel_sm_sim_ctx_t sm_ctx;
+    int sm_failed;
+    uint64_t sm_cycles;
 };
 
 static void pause_s(double s)
@@ -44,11 +53,12 @@ static void *sim_thread(void *arg)
     const accel_op_t *op = &sim->op;
     const int M = (int)op->M, N = (int)op->N, K = (int)op->K;
     const int planes = op->in_bits > 8 ? 2 : 1;
-    const int out16 = op->out_bits > 8;
-    const size_t esz = out16 ? 2 : 1;
+    const int raw = op->raw32;
+    const int out16 = !raw && op->out_bits > 8;
+    const size_t esz = raw ? 4 : out16 ? 2 : 1;
     const uint32_t base = ACCEL_REGION_PHYS;
     sim->failed = 1;
-    if (op->raw32 || op->in_unsigned || N % 16 || op->a_phys < base || op->w_phys < base || op->out_phys < base)
+    if (N % 16 || (op->in_unsigned && planes != 2) || (raw && planes != 1) || op->a_phys < base || op->w_phys < base || op->out_phys < base)
         return NULL;
     const size_t stride = op->stride_out ? op->stride_out : (size_t)N * esz;
     const size_t a_bytes = (size_t)((M + 15) / 16) * planes * K * 16;
@@ -96,9 +106,19 @@ static void *sim_thread(void *arg)
     }
     if (planes == 1)
         gemm_s8(a8, w8, acc, M, N, K);
-    else
+    else if (op->in_unsigned) {
+        /* UQ0.16 probabilities: same order and int32 wrap-around as attention_head_ref */
+        for (int r = 0; r < M; r++)
+            for (int n = 0; n < N; n++) {
+                uint32_t s = 0;
+                for (int k = 0; k < K; k++)
+                    s += (uint32_t)(uint16_t)a16[(size_t)r * K + k] * (uint32_t)(int32_t)w8[(size_t)n * K + k];
+                acc[(size_t)r * N + n] = (int32_t)s;
+            }
+    } else
         gemm_s16(a16, w8, acc, M, N, K);
-    epilogue_int(acc, M, N, bias, m0, sh, op->out_bits, y);
+    if (!raw)
+        epilogue_int(acc, M, N, bias, m0, sh, op->out_bits, y);
 
     const double macs = (double)M * N * K;
     const double dur = macs / SIM_MACS_PER_S;
@@ -108,7 +128,9 @@ static void *sim_thread(void *arg)
         const int r0 = (int)((int64_t)M * s / SIM_SLICES), r1 = (int)((int64_t)M * (s + 1) / SIM_SLICES);
         for (int r = r0; r < r1; r++) {
             uint8_t *o = O + (size_t)r * stride;
-            if (out16)
+            if (raw)
+                memcpy(o, acc + (size_t)r * N, (size_t)N * 4);
+            else if (out16)
                 memcpy(o, y + (size_t)r * N, (size_t)N * 2);
             else
                 for (int n = 0; n < N; n++)
@@ -120,6 +142,116 @@ static void *sim_thread(void *arg)
 done:
     free(a8); free(a16); free(w8); free(y); free(acc); free(bias); free(m0); free(sh);
     return NULL;
+}
+
+/* softmax unit: reads S row by row, writes P (two 16-bit planes, KP words, zero padded) row by row with pauses */
+static void *sm_thread(void *arg)
+{
+    struct accel_sim *sim = arg;
+    accel_hw_t *h = sim->hw;
+    const accel_sm_op_t *op = &sim->sm_op;
+    const uint32_t base = ACCEL_REGION_PHYS;
+    const int rows = (int)op->rows, cols = (int)op->cols, kp = (int)op->kp;
+    sim->sm_failed = 1;
+    if (!sim->sm_ctx.pkg || !sim->sm_ctx.block || rows <= 0 || cols <= 0 || kp < cols || (op->s_stride & 3) ||
+        op->s_phys < base || op->p_phys < base)
+        return NULL;
+    const size_t s_bytes = (size_t)(rows - 1) * op->s_stride + (size_t)cols * 4;
+    const size_t p_bytes = (size_t)((rows + 15) / 16) * 2 * kp * 16;
+    if (op->s_phys - base + s_bytes > h->region_len || op->p_phys - base + p_bytes > h->region_len)
+        return NULL;
+    const uint8_t *S = h->region + (op->s_phys - base);
+    uint8_t *P = h->region + (op->p_phys - base);
+    int32_t *srow = malloc((size_t)cols * sizeof *srow);
+    uint16_t *prow = malloc((size_t)cols * sizeof *prow);
+    if (!srow || !prow)
+        goto done;
+    const double macs = (double)rows * cols;
+    sim->sm_cycles = (uint64_t)macs + 1000;
+    const double dur = macs / SIM_SM_ELEMS_PER_S;
+    for (int s = 0; s < SIM_SLICES; s++) {
+        const int r0 = (int)((int64_t)rows * s / SIM_SLICES), r1 = (int)((int64_t)rows * (s + 1) / SIM_SLICES);
+        pause_s(dur / SIM_SLICES);
+        for (int r = r0; r < r1; r++) {
+            memcpy(srow, S + (size_t)r * op->s_stride, (size_t)cols * 4);
+            softmax_row_int(sim->sm_ctx.pkg, sim->sm_ctx.block, srow, cols, prow);
+            const size_t sub = (size_t)r / 16, i = (size_t)r % 16;
+            uint8_t *hi = P + sub * 2 * kp * 16, *lo = hi + (size_t)kp * 16;
+            for (int k = 0; k < kp; k++) {
+                const uint16_t v = k < cols ? prow[k] : 0;
+                hi[(size_t)k * 16 + i] = (uint8_t)(v >> 8);
+                lo[(size_t)k * 16 + i] = (uint8_t)v;
+            }
+        }
+    }
+    /* padding rows of the last subtile are zero */
+    for (int r = rows; r % 16; r++) {
+        const size_t sub = (size_t)r / 16, i = (size_t)r % 16;
+        uint8_t *hi = P + sub * 2 * kp * 16, *lo = hi + (size_t)kp * 16;
+        for (int k = 0; k < kp; k++)
+            hi[(size_t)k * 16 + i] = lo[(size_t)k * 16 + i] = 0;
+    }
+    sim->sm_failed = 0;
+done:
+    free(srow);
+    free(prow);
+    return NULL;
+}
+
+static void *sm_entry(void *arg)
+{
+    struct accel_sim *sim = arg;
+    sm_thread(arg);
+    __sync_synchronize();
+    sim->sm_done = 1;
+    return NULL;
+}
+
+int accel_sim_sm_busy(const accel_hw_t *h)
+{
+    return h->sim->sm_running && !h->sim->sm_done;
+}
+
+int accel_sim_sm_start(accel_hw_t *h, const accel_sm_op_t *op)
+{
+    struct accel_sim *s = h->sim;
+    if (s->sm_running) {
+        fprintf(stderr, "accel(sim): softmax start while a softmax is still in flight\n");
+        return -1;
+    }
+    s->sm_op = *op;
+    if (op->sim_ctx)
+        s->sm_ctx = *(const accel_sm_sim_ctx_t *)op->sim_ctx;
+    else
+        memset(&s->sm_ctx, 0, sizeof s->sm_ctx);
+    s->sm_failed = 1;
+    s->sm_done = 0;
+    if (pthread_create(&s->sm_th, NULL, sm_entry, s) != 0)
+        return -1;
+    s->sm_running = 1;
+    return 0;
+}
+
+int accel_sim_sm_wait(accel_hw_t *h, accel_stat_t *st)
+{
+    struct accel_sim *s = h->sim;
+    if (!s->sm_running) {
+        fprintf(stderr, "accel(sim): softmax wait without a started softmax\n");
+        return -1;
+    }
+    pthread_join(s->sm_th, NULL);
+    s->sm_running = 0;
+    if (st) {
+        st->wall_s = 0;
+        st->cycles = s->sm_cycles;
+        st->bytes_rd = st->bytes_wr = 0;
+    }
+    if (s->sm_failed) {
+        fprintf(stderr, "accel(sim): softmax rows=%u cols=%u failed (bad descriptor or no sim_ctx)\n", s->sm_op.rows,
+                s->sm_op.cols);
+        return -1;
+    }
+    return 0;
 }
 
 /* thread entry: run the operation, then publish completion */
@@ -198,6 +330,8 @@ int accel_sim_wait(accel_hw_t *h, accel_stat_t *st)
 
 void accel_sim_free(accel_hw_t *h)
 {
+    if (h->sim && h->sim->sm_running)
+        pthread_join(h->sim->sm_th, NULL);
     if (h->sim && h->sim->running)
         pthread_join(h->sim->th, NULL);
     free(h->sim);

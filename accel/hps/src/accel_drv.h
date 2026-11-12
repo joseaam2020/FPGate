@@ -13,6 +13,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pkg.h"
+
 #define ACCEL_REGION_PHYS 0x30000000u
 
 typedef struct accel_hw {
@@ -51,7 +53,14 @@ typedef struct {
     uint32_t s_phys, s_stride, p_phys;
     uint32_t m0;
     int sh;
+    const void *sim_ctx;        /* ignored by the hardware; the software model reads an accel_sm_sim_ctx_t */
 } accel_sm_op_t;
+
+/* what the software softmax unit needs to run softmax_row_int (the hardware has the tables built in) */
+typedef struct {
+    const pkg_t *pkg;
+    const block_t *block;
+} accel_sm_sim_ctx_t;
 
 /* softmax unit: scores (RAW32 output of the engine) -> probabilities in the activation format. 0 on DONE. */
 int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
@@ -60,7 +69,8 @@ int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, do
  * ordinary memory and an operation runs on a worker thread that decodes the same packed formats and
  * writes the output progressively after a delay proportional to its size, so ordering mistakes
  * (reading or overwriting a buffer the "engine" is still using) show up as wrong results.
- * Supports the linear operations only (no RAW32, no softmax unit). */
+ * Supports RAW32, unsigned 16-bit input, stride_out, and a softmax unit on a second thread (accel_sim_sm_*)
+ * that can be in flight at the same time as the engine. */
 int accel_hw_open_sim(accel_hw_t *h, size_t region_len);
 
 /* Starts one operation without waiting: the engine works while the caller does something else.
@@ -79,6 +89,10 @@ int accel_sim_busy(const accel_hw_t *h);
 int accel_sim_start(accel_hw_t *h, const accel_op_t *op);
 int accel_sim_wait(accel_hw_t *h, accel_stat_t *st);
 void accel_sim_free(accel_hw_t *h);
+/* software softmax unit: one operation in flight; sm_op.sim_ctx must point to an accel_sm_sim_ctx_t */
+int accel_sim_sm_start(accel_hw_t *h, const accel_sm_op_t *op);
+int accel_sim_sm_wait(accel_hw_t *h, accel_stat_t *st);
+int accel_sim_sm_busy(const accel_hw_t *h);
 
 /* start + wait */
 int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double timeout_s);

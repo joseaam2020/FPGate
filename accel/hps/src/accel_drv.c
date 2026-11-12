@@ -228,6 +228,11 @@ int accel_hw_run(accel_hw_t *h, const accel_op_t *op, accel_stat_t *st, double t
 
 int accel_hw_run_sm(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s)
 {
+    if (h->sim) {
+        if (accel_sim_sm_start(h, op) != 0)
+            return -1;
+        return accel_sim_sm_wait(h, st);
+    }
     if (!h->has_softmax) {
         fprintf(stderr, "accel: this bitstream has no softmax unit\n");
         return -1;
