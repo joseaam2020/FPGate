@@ -3,6 +3,7 @@
  *
  *   hps_bench mem      bandwidth of the reserved DDR3 region from the HPS (uncached and cached mappings)
  *   hps_bench cpu      CPU cost: INT8 GEMM with NEON, LayerNorm (float32), integer softmax
+ *   hps_bench micro    region reads with ldm (8 registers) and vld1.8 {d0-d7}; LayerNorm in three timed phases
  *   hps_bench all
  *
  * Reads and writes the first 32 MiB of the reserved region (0x30000000), which nothing else uses
@@ -268,14 +269,149 @@ static int run_cpu(void)
     return 0;
 }
 
+/* ---------------------------------------------------------------- micro */
+
+static void result_bw(const char *name, size_t bytes, double secs)
+{
+    printf("RESULT bench: %s %.1f MB/s\n", name, (double)bytes / secs / 1e6);
+    fflush(stdout);
+}
+
+static void result_ms(const char *name, double secs)
+{
+    printf("RESULT bench: %s %.2f ms\n", name, secs * 1e3);
+    fflush(stdout);
+}
+
+/* Four ldm of 8 registers per step: 128 bytes. r7 is left out so it can stay the frame pointer. */
+static void micro_ldm(const uint8_t *r, size_t n)
+{
+    const int reps = 4;
+    double t = now_s();
+    for (int rep = 0; rep < reps; rep++) {
+        const uint32_t *p = (const uint32_t *)r;
+        for (size_t i = 0; i < n; i += 128) {
+            __asm__ volatile(
+                "ldmia %[p]!, {r0, r1, r2, r3, r4, r5, r6, r8}\n\t"
+                "ldmia %[p]!, {r0, r1, r2, r3, r4, r5, r6, r8}\n\t"
+                "ldmia %[p]!, {r0, r1, r2, r3, r4, r5, r6, r8}\n\t"
+                "ldmia %[p]!, {r0, r1, r2, r3, r4, r5, r6, r8}\n\t"
+                : [p] "+r" (p)
+                :
+                : "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r8", "memory");
+        }
+    }
+    result_bw("region_read_ldm8_128B", n * reps, now_s() - t);
+}
+
+/* 128 bytes per step: two groups of vld1.8 {d0-d3} + {d4-d7} (a single vld1 takes at most four D registers). */
+static void micro_vld1(const uint8_t *r, size_t n)
+{
+    const int reps = 4;
+    double t = now_s();
+    for (int rep = 0; rep < reps; rep++) {
+        const uint8_t *p = r;
+        for (size_t i = 0; i < n; i += 128) {
+            __asm__ volatile(
+                "vld1.8 {d0-d3}, [%[p]]!\n\t"
+                "vld1.8 {d4-d7}, [%[p]]!\n\t"
+                "vld1.8 {d0-d3}, [%[p]]!\n\t"
+                "vld1.8 {d4-d7}, [%[p]]!\n\t"
+                : [p] "+r" (p)
+                :
+                : "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "memory");
+        }
+    }
+    result_bw("region_read_vld1_d0-d7_128B", n * reps, now_s() - t);
+}
+
+static int run_micro(void)
+{
+    puts("[micro] ARM microbenchmarks (one core)");
+    int fd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (fd < 0) { perror("open /dev/mem"); return 1; }
+    void *u = mmap(NULL, TEST_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, REGION_PHYS);
+    if (u == MAP_FAILED) { perror("mmap uncached"); return 1; }
+    micro_ldm((const uint8_t *)u, TEST_BYTES);
+    micro_vld1((const uint8_t *)u, TEST_BYTES);
+    munmap(u, TEST_BYTES);
+    close(fd);
+
+    /* LayerNorm of 1025 x 768 (same arithmetic as layer_norm() in ops.c), one timed pass per phase */
+    const int rows = 1025, d = 768, reps = 5;
+    const float epsf = 1e-6f;
+    float *x = malloc((size_t)rows * d * 4), *y = malloc((size_t)rows * d * 4);
+    float *g = malloc(d * 4), *b = malloc(d * 4);
+    float *mu = malloc(rows * 4), *den = malloc(rows * 4);
+    for (int i = 0; i < rows * d; i++) x[i] = (float)(rand() % 2000 - 1000) * 0.01f;
+    for (int i = 0; i < d; i++) { g[i] = 1.0f; b[i] = 0.0f; }
+
+    double t_sum = 0.0, t_var = 0.0, t_norm = 0.0;
+    for (int rep = 0; rep < reps; rep++) {
+        double t = now_s();
+        for (int r = 0; r < rows; r++) {                     /* phase 1: sums -> mean */
+            const float *xr = x + (size_t)r * d;
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            int j = 0;
+            for (; j + 4 <= d; j += 4) {
+                s0 += xr[j]; s1 += xr[j + 1]; s2 += xr[j + 2]; s3 += xr[j + 3];
+            }
+            for (; j < d; j++)
+                s0 += xr[j];
+            mu[r] = (float)(((s0 + s1) + (s2 + s3)) / d);
+        }
+        t_sum += now_s() - t;
+
+        t = now_s();
+        for (int r = 0; r < rows; r++) {                     /* phase 2: variance -> 1/denominator */
+            const float *xr = x + (size_t)r * d;
+            const float m = mu[r];
+            double v0 = 0.0, v1 = 0.0, v2 = 0.0, v3 = 0.0;
+            int j = 0;
+            for (; j + 4 <= d; j += 4) {
+                const float e0 = xr[j] - m, e1 = xr[j + 1] - m, e2 = xr[j + 2] - m, e3 = xr[j + 3] - m;
+                v0 += (double)(e0 * e0); v1 += (double)(e1 * e1); v2 += (double)(e2 * e2); v3 += (double)(e3 * e3);
+            }
+            for (; j < d; j++) {
+                const float e = xr[j] - m;
+                v0 += (double)(e * e);
+            }
+            const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
+            den[r] = sqrtf(var + epsf);
+        }
+        t_var += now_s() - t;
+
+        t = now_s();
+        for (int r = 0; r < rows; r++) {                     /* phase 3: normalise, with a division per element */
+            const float *xr = x + (size_t)r * d;
+            float *yr = y + (size_t)r * d;
+            const float m = mu[r], dn = den[r];
+            for (int k = 0; k < d; k++) {
+                float t2 = (xr[k] - m) / dn;
+                t2 = t2 * g[k];
+                yr[k] = t2 + b[k];
+            }
+        }
+        t_norm += now_s() - t;
+    }
+    result_ms("layernorm_1025x768_phase1_sums", t_sum / reps);
+    result_ms("layernorm_1025x768_phase2_variance", t_var / reps);
+    result_ms("layernorm_1025x768_phase3_normalise_div", t_norm / reps);
+    sink += (uint32_t)(int)y[5];
+    free(x); free(y); free(g); free(b); free(mu); free(den);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *what = argc > 1 ? argv[1] : "all";
+    const int all = !strcmp(what, "all");
     int rc = 0;
-    if (!strcmp(what, "mem") || !strcmp(what, "all")) rc |= run_mem();
-    if (!strcmp(what, "cpu") || !strcmp(what, "all")) rc |= run_cpu();
-    if (strcmp(what, "mem") && strcmp(what, "cpu") && strcmp(what, "all")) {
-        puts("usage: hps_bench [mem|cpu|all]");
+    if (!strcmp(what, "mem") || all) rc |= run_mem();
+    if (!strcmp(what, "cpu") || all) rc |= run_cpu();
+    if (!strcmp(what, "micro") || all) rc |= run_micro();
+    if (strcmp(what, "mem") && strcmp(what, "cpu") && strcmp(what, "micro") && !all) {
+        puts("usage: hps_bench [mem|cpu|micro|all]");
         return 2;
     }
     return rc + (sink == 0x12345678u);
