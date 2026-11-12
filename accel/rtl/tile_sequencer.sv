@@ -51,6 +51,7 @@ module tile_sequencer #(
   input  logic        row_last_seen,
   input  logic        lt_busy,
   input  logic        wr_idle,
+  input  logic [7:0]  fifo_free,      // free entries of the output FIFO (registered)
   input  logic        progress,
   input  logic        ext_err_valid,
   input  logic [7:0]  ext_err_code,
@@ -69,7 +70,7 @@ module tile_sequencer #(
   state_t state, state_q;
 
   // latched operation
-  logic        in16, out16;
+  logic        in16, out16, op_raw32_q;
   logic [7:0]  spp;
   logic [31:0] m, n;
   logic [15:0] k, kb, kw, planes_k;     // K, K/2, planes*K words
@@ -87,6 +88,8 @@ module tile_sequencer #(
 
   // watchdog
   logic [31:0] wd;
+  logic [7:0]  fifo_free_q;
+  wire  [7:0]  fifo_need = op_raw32_q ? 8'd32 : 8'd16;
 
   assign busy        = (state != S_IDLE);
   assign fd_k        = k;
@@ -124,6 +127,7 @@ module tile_sequencer #(
     fd_start  <= 1'b0;
     sub_start <= 1'b0;
     state_q   <= state;
+    fifo_free_q <= fifo_free;
 
     if (!rst_n) begin
       state <= S_IDLE;
@@ -133,12 +137,12 @@ module tile_sequencer #(
       if (rd_done && pf_pending) pf_done <= 1'b1;
 
       // watchdog
-      if (state == S_IDLE || progress || state != state_q) wd <= '0;
+      if (state == S_IDLE || progress || state != state_q || fifo_free != fifo_free_q) wd <= '0;
       else                                                  wd <= wd + 1'b1;
 
       case (state)
         S_IDLE: if (start) begin
-          in16 <= op_in16; out16 <= op_out16; spp <= sub_per_panel;
+          in16 <= op_in16; out16 <= op_out16; op_raw32_q <= op_raw32; spp <= sub_per_panel;
           m <= dim_m; n <= dim_n; k <= dim_k[15:0];
           kb <= dim_k[15:1];
           kw <= dim_k[15:0];
@@ -229,7 +233,8 @@ module tile_sequencer #(
           state       <= S_SSTART;
         end
 
-        S_SSTART: begin
+        // a subtile pushes 16 rows (32 FIFO entries in RAW32): wait until they fit
+        S_SSTART: if (fifo_free >= fifo_need) begin
           sub_rows_valid <= is_last_sub ? (5'(m - 32'd1) & 5'h0F) + 5'd1 : 5'd16;
           sub_start      <= 1'b1;
           fd_start       <= 1'b1;

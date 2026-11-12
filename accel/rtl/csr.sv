@@ -27,7 +27,7 @@
 //
 // Errors: 1 = START while BUSY, otherwise the code given by the engine (hw_err_code).
 module csr #(
-  parameter logic [31:0] VERSION_VALUE = 32'h4650_0001   // 'F''P' . version 0001
+  parameter logic [31:0] VERSION_VALUE = 32'h4650_0002   // 'F''P' . version 0002
 )(
   input  logic        clk,
   input  logic        rst_n,

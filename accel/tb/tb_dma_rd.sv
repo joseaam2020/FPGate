@@ -10,6 +10,7 @@ module tb_dma_rd;
   logic rst_n = 0;
   always #3.333 clk = ~clk;
 
+  logic         flush = 1'b0;
   logic         cmd_valid, cmd_ready, busy, done, err, beat_valid;
   logic [31:0]  cmd_addr;
   logic [15:0]  cmd_beats;

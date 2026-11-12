@@ -243,7 +243,7 @@ static void test_regs(void)
     printf("[regs] identification and registers\n");
     v = rd(R_VERSION);
     printf("  VERSION = 0x%08x\n", v);
-    check(v == 0x46500001u, "VERSION is 'FP' 0001", v, 0x46500001u);
+    check(v == 0x46500001u || v == 0x46500002u, "VERSION is 'FP' 0001/0002", v, 0x46500002u);
     check(rd(0x60) == 0xDEADBEEFu, "unmapped register reads 0xDEADBEEF", rd(0x60), 0xDEADBEEFu);
 
     uint32_t h0 = rd(R_HEARTBEAT);
@@ -258,7 +258,7 @@ static void test_regs(void)
     wr(R_SCRATCH, 0xA5A55A5Au);
     check(rd(R_SCRATCH) == 0xA5A55A5Au, "SCRATCH write/read", rd(R_SCRATCH), 0xA5A55A5Au);
     wr(R_VERSION, 0xFFFFFFFFu);
-    check(rd(R_VERSION) == 0x46500001u, "VERSION is read-only", rd(R_VERSION), 0x46500001u);
+    check(rd(R_VERSION) == v, "VERSION is read-only", rd(R_VERSION), v);
 
     /* bad parameters are rejected by the real engine (error code 2) */
     wr(R_CTRL, CTRL_RESET_SOFT);

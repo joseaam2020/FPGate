@@ -1,12 +1,21 @@
 // Write DMA: accepts one 256-bit beat at a time (address, data, byte enables) and
 // writes it with a single-beat Avalon-MM write. valid/ready on the input side; a new
 // beat can be taken in the same cycle the previous one completes. If the slave holds
-// waitrequest for TIMEOUT cycles the beat is dropped and `err` pulses.
+// waitrequest for TIMEOUT cycles `err` pulses once.
+//
+// A beat that was presented to the bus is never withdrawn: dropping `write` while the slave
+// still holds waitrequest breaks the Avalon rule and can leave the f2h interconnect waiting
+// for the rest of the transaction (the port then moves 0 bytes until reset). On `flush` (soft
+// reset / abort of the operation) and after a timeout the beat is therefore held, unchanged,
+// until the slave takes it. It is then "stale": no wr_beat/err is reported for it. The
+// burst length is 1, so there are no missing beats of a started burst to pad with
+// byteenable = 0.
 module dma_wr #(
   parameter int TIMEOUT = 4096
 )(
   input  logic         clk,
-  input  logic         rst_n,
+  input  logic         rst_n,          // hard reset only (drops a pending beat)
+  input  logic         flush,          // abandon the operation: refuse new beats, finish the pending one
   input  logic         in_valid,
   output logic         in_ready,
   input  logic [31:0]  in_addr,        // byte address, 32-byte aligned
@@ -24,32 +33,36 @@ module dma_wr #(
   input  logic         m_waitrequest
 );
   logic        pending;
+  logic        stale;
   logic [31:0] tmo;
 
   assign m_write      = pending;
   assign m_burstcount = 8'd1;
   assign busy         = pending;
-  assign in_ready     = !pending || !m_waitrequest;
+  assign in_ready     = (!pending || !m_waitrequest) && !flush;
 
   always_ff @(posedge clk) begin
     wr_beat <= 1'b0;
     err     <= 1'b0;
     if (!rst_n) begin
       pending <= 1'b0;
+      stale   <= 1'b0;
       tmo     <= '0;
     end else begin
-      if (pending && !m_waitrequest) begin
-        pending <= 1'b0;
-        wr_beat <= 1'b1;
-      end
+      if (pending && flush) stale <= 1'b1;
       if (pending && m_waitrequest) begin
         tmo <= tmo + 1'b1;
-        if (tmo >= 32'(TIMEOUT)) begin
-          pending <= 1'b0;
-          err     <= 1'b1;
+        if (tmo >= 32'(TIMEOUT) && !stale && !flush) begin
+          err   <= 1'b1;
+          stale <= 1'b1;          // keep holding the beat; report nothing more for it
         end
       end else begin
         tmo <= '0;
+      end
+      if (pending && !m_waitrequest) begin
+        pending <= 1'b0;
+        stale   <= 1'b0;
+        wr_beat <= !stale && !flush;
       end
       if (in_valid && in_ready) begin
         m_address    <= in_addr;

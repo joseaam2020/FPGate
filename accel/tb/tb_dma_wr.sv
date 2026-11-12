@@ -9,6 +9,7 @@ module tb_dma_wr;
   logic rst_n = 0;
   always #3.333 clk = ~clk;
 
+  logic         flush = 1'b0;
   logic         in_valid, in_ready, busy, wr_beat, err;
   logic [31:0]  in_addr, in_be;
   logic [255:0] in_data;

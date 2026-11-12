@@ -88,8 +88,11 @@ module attn_softmax
   logic [15:0]  beat_idx;
   wire          rd_cmd_valid = (state == S_REQ);
 
+  // the DMAs survive a soft reset / error: they finish the bus transaction in flight (see dma_wr, dma_rd)
+  wire dma_flush = soft_reset | (state == S_ERR);
+
   dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT)) u_dma_rd (
-    .clk, .rst_n(rst_dp),
+    .clk, .rst_n, .flush(dma_flush),
     .cmd_valid(rd_cmd_valid), .cmd_ready(rd_cmd_ready), .cmd_addr(s_cur), .cmd_beats(nw),
     .busy(rd_busy), .done(rd_done), .err(rd_err),
     .beat_valid, .beat_data, .beat_idx,
@@ -102,7 +105,7 @@ module attn_softmax
   logic [255:0] wr_in_data;
 
   dma_wr #(.TIMEOUT(DMA_TIMEOUT)) u_dma_wr (
-    .clk, .rst_n(rst_dp),
+    .clk, .rst_n, .flush(dma_flush),
     .in_valid(wr_in_valid), .in_ready(wr_in_ready),
     .in_addr(wr_in_addr), .in_data(wr_in_data), .in_be(32'hFFFF_FFFF),
     .busy(wr_busy), .wr_beat, .err(wr_err),

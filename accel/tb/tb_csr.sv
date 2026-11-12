@@ -58,7 +58,7 @@ module tb_csr;
     repeat (3) @(posedge clk);
 
     // identification and reset values
-    expect_eq("VERSION", 32'h00, 32'h4650_0001);
+    expect_eq("VERSION", 32'h00, 32'h4650_0002);
     expect_eq("STATUS idle", 32'h08, 32'h0);
     expect_eq("ERR_CODE", 32'h0C, 32'h0);
     expect_eq("unmapped", 32'h60, 32'hDEAD_BEEF);
@@ -66,7 +66,7 @@ module tb_csr;
     // read-only registers ignore writes
     wr(32'h00, 32'hFFFF_FFFF);
     wr(32'h08, 32'hFFFF_FFFF);
-    expect_eq("VERSION after write", 32'h00, 32'h4650_0001);
+    expect_eq("VERSION after write", 32'h00, 32'h4650_0002);
     expect_eq("STATUS after write", 32'h08, 32'h0);
 
     // heartbeat advances

@@ -60,6 +60,8 @@ module gemm_engine
   logic abort;
   wire  rst_seq = rst_n & ~soft_reset;
   wire  rst_dp  = rst_n & ~soft_reset & ~abort;
+  // the DMAs survive a soft reset / abort: they finish the bus transaction in flight (see dma_wr, dma_rd)
+  wire  dma_flush = soft_reset | abort;
 
   // ---- sequencer --------------------------------------------------------------
   logic        rd_cmd_valid, rd_cmd_ready, rd_to_a, rd_done, rd_err;
@@ -73,6 +75,7 @@ module gemm_engine
   logic        row_last_seen, lt_busy, wr_idle, progress, ext_err_valid;
   logic [7:0]  ext_err_code;
   logic        seq_busy;
+  logic [7:0]  fifo_free;
 
   tile_sequencer #(.A_WORDS(A_BEATS * 2), .W_BEATS(W_BEATS), .WD_LIMIT(WD_LIMIT)) u_seq (
     .clk, .rst_n(rst_seq), .start,
@@ -82,7 +85,7 @@ module gemm_engine
     .w_load_sel, .w_comp_sel,
     .fd_start, .fd_a_base, .fd_k, .fd_two_pass,
     .sub_start, .sub_addr, .sub_rows_valid,
-    .row_last_seen, .lt_busy, .wr_idle, .progress, .ext_err_valid, .ext_err_code,
+    .row_last_seen, .lt_busy, .wr_idle, .fifo_free, .progress, .ext_err_valid, .ext_err_code,
     .busy(seq_busy), .done(hw_done), .err_valid(hw_err_valid), .err_code(hw_err_code), .abort
   );
 
@@ -103,7 +106,7 @@ module gemm_engine
   assign rd_done = rd_done_sr[RD_DONE_DLY-1];
 
   dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT)) u_dma_rd (
-    .clk, .rst_n(rst_dp),
+    .clk, .rst_n, .flush(dma_flush),
     .cmd_valid(rd_cmd_valid), .cmd_ready(rd_cmd_ready),
     .cmd_addr(rd_cmd_addr), .cmd_beats(rd_cmd_beats),
     .busy(dma_rd_busy), .done(rd_done_dma), .err(rd_err),
@@ -255,7 +258,7 @@ module gemm_engine
   assign wr_in_valid = !fifo_empty;
 
   dma_wr #(.TIMEOUT(DMA_TIMEOUT)) u_dma_wr (
-    .clk, .rst_n(rst_dp),
+    .clk, .rst_n, .flush(dma_flush),
     .in_valid(wr_in_valid), .in_ready(wr_in_ready),
     .in_addr(fifo_head[287:256]), .in_data(fifo_head[255:0]), .in_be(fifo_head[319:288]),
     .busy(wr_busy), .wr_beat, .err(wr_err),
@@ -264,6 +267,14 @@ module gemm_engine
   );
 
   assign wr_idle = fifo_empty && !wr_busy;
+
+  // free FIFO entries (registered; counts the raw32 half row that is still to be written)
+  logic [FW:0] fifo_used;
+  assign fifo_used = wp - rp;                  // modulo 2*OUT_FIFO, so computed at the pointer width
+  always_ff @(posedge clk) begin
+    if (!rst_dp) fifo_free <= 8'(OUT_FIFO);
+    else         fifo_free <= 8'(OUT_FIFO) - 8'(fifo_used) - 8'(raw_hold);
+  end
 
   // ---- errors, progress, counters ----------------------------------------------------------
   always_comb begin

@@ -127,7 +127,7 @@ module tb_core;
     rst_n = 1;
     repeat (3) @(posedge clk);
 
-    rd(32'h00, v); expect_eq("VERSION", v, 32'h4650_0001);
+    rd(32'h00, v); expect_eq("VERSION", v, 32'h4650_0002);
 
     run_layer("b0_q_w", 2);
     run_layer("b0_fc2_w", 1);

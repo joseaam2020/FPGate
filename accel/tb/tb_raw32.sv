@@ -124,7 +124,7 @@ module tb_raw32;
     rst_n = 1;
     repeat (3) @(posedge clk);
 
-    rd(32'h00, v); expect_eq("VERSION", v, 32'h4650_0001);
+    rd(32'h00, v); expect_eq("VERSION", v, 32'h4650_0002);
     run_dir("vectors/attn_b0_h0");
     run_dir("vectors/attn_b11_h5");
 

@@ -2,7 +2,7 @@
 // the accelerator, i.e. this module sees word addresses 0..63). Same conventions as csr.sv: 32-bit word
 // addressed slave, read latency 1, no wait states; START / RESET_SOFT / CLEAR_ERR in CTRL.
 //
-//   0x00 VERSION     R    'S''M' . version 0001
+//   0x00 VERSION     R    'S''M' . version 0002
 //   0x04 CTRL        W    [0] START  [1] RESET_SOFT  [3] CLEAR_ERR
 //   0x08 STATUS      R    [0] BUSY  [1] DONE  [2] ERROR
 //   0x0C ERR_CODE    R    1 START while BUSY, 2 bad parameters, 3 read timeout, 4 write timeout, 6 watchdog
@@ -18,7 +18,7 @@
 //   0x34 BYTES_RD    R
 //   0x38 BYTES_WR    R
 module csr_sm #(
-  parameter logic [31:0] VERSION_VALUE = 32'h534D_0001
+  parameter logic [31:0] VERSION_VALUE = 32'h534D_0002
 )(
   input  logic        clk,
   input  logic        rst_n,

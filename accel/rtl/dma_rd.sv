@@ -4,12 +4,18 @@
 //
 // Bursts are at most BURST beats and never cross a 4 KiB boundary. If a burst gets
 // no data for TIMEOUT cycles the command is aborted with `err`.
+//
+// On `flush` (soft reset / abort) or after a timeout the unit does not drop what is on the
+// bus: a request that is waiting for the slave is held until accepted, and the beats the slave
+// still owes for an accepted burst are consumed (S_DRAIN, bounded by TIMEOUT) before the unit
+// is ready again, so stale data never leaks into the next command.
 module dma_rd #(
   parameter int BURST   = 16,
   parameter int TIMEOUT = 4096
 )(
   input  logic         clk,
-  input  logic         rst_n,
+  input  logic         rst_n,          // hard reset only
+  input  logic         flush,          // abandon the command, finish the bus transaction
   // command
   input  logic         cmd_valid,
   output logic         cmd_ready,
@@ -30,7 +36,7 @@ module dma_rd #(
   input  logic [255:0] m_readdata,
   input  logic         m_readdatavalid
 );
-  typedef enum logic [1:0] {S_IDLE, S_PREP, S_REQ, S_DATA} state_t;
+  typedef enum logic [2:0] {S_IDLE, S_PREP, S_REQ, S_DATA, S_DRAIN} state_t;
   state_t state;
 
   logic [31:0] addr;
@@ -38,6 +44,7 @@ module dma_rd #(
   logic [7:0]  bl, got;
   logic [31:0] tmo;
   logic [15:0] idx;
+  logic        aborted;               // flush seen while the request was waiting
 
   // burst length: min(left, BURST, beats until the next 4 KiB boundary)
   logic [7:0] to_bound, bl_next;
@@ -47,7 +54,7 @@ module dma_rd #(
     if (to_bound < bl_next) bl_next = to_bound;
   end
 
-  assign cmd_ready    = (state == S_IDLE);
+  assign cmd_ready    = (state == S_IDLE) && !flush;
   assign busy         = (state != S_IDLE);
   assign m_read       = (state == S_REQ);
   assign m_address    = addr;
@@ -60,25 +67,28 @@ module dma_rd #(
     done <= 1'b0;
     err  <= 1'b0;
     if (!rst_n) begin
-      state <= S_IDLE;
-      idx   <= '0;
+      state   <= S_IDLE;
+      idx     <= '0;
+      aborted <= 1'b0;
     end else begin
+      if (flush && state == S_REQ) aborted <= 1'b1;
       case (state)
-        S_IDLE: if (cmd_valid) begin
-          addr <= cmd_addr;
-          left <= cmd_beats;
-          idx  <= '0;
+        S_IDLE: if (cmd_valid && !flush) begin
+          addr    <= cmd_addr;
+          left    <= cmd_beats;
+          idx     <= '0;
+          aborted <= 1'b0;
           if (cmd_beats == 0) done <= 1'b1;
           else                state <= S_PREP;
         end
         S_PREP: begin
           bl    <= bl_next;
-          state <= S_REQ;
+          state <= flush ? S_IDLE : S_REQ;
         end
         S_REQ: if (!m_waitrequest) begin
           got   <= '0;
           tmo   <= '0;
-          state <= S_DATA;
+          state <= (aborted || flush) ? S_DRAIN : S_DATA;
         end
         S_DATA: begin
           tmo <= tmo + 1'b1;
@@ -89,15 +99,33 @@ module dma_rd #(
             if (got + 1'b1 == bl) begin
               addr <= addr + {bl, 5'b0};
               left <= left - 16'(bl);
-              if (left == 16'(bl)) begin
+              if (flush) begin
+                state <= S_IDLE;
+              end else if (left == 16'(bl)) begin
                 done  <= 1'b1;
                 state <= S_IDLE;
               end else begin
                 state <= S_PREP;
               end
+            end else if (flush) begin
+              state <= S_DRAIN;
             end
+          end else if (flush) begin
+            tmo   <= '0;
+            state <= S_DRAIN;
           end else if (tmo >= 32'(TIMEOUT)) begin
             err   <= 1'b1;
+            tmo   <= '0;
+            state <= S_DRAIN;
+          end
+        end
+        S_DRAIN: begin
+          tmo <= tmo + 1'b1;
+          if (m_readdatavalid) begin
+            tmo <= '0;
+            got <= got + 1'b1;
+            if (got + 1'b1 == bl) state <= S_IDLE;
+          end else if (tmo >= 32'(TIMEOUT)) begin
             state <= S_IDLE;
           end
         end
