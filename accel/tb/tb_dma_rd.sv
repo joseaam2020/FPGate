@@ -11,7 +11,7 @@ module tb_dma_rd;
   always #3.333 clk = ~clk;
 
   logic         flush = 1'b0;
-  logic         cmd_valid, cmd_ready, busy, done, err, beat_valid;
+  logic         cmd_valid, cmd_ready, busy, done, err, err_win, beat_valid;
   logic [31:0]  cmd_addr;
   logic [15:0]  cmd_beats;
   logic [255:0] beat_data;
@@ -22,7 +22,7 @@ module tb_dma_rd;
   logic [7:0]   m_burstcount;
   logic [255:0] m_readdata;
 
-  dma_rd #(.BURST(16), .TIMEOUT(200)) dut (.*);
+  dma_rd #(.BURST(16), .TIMEOUT(200), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   avalon_mem_model #(.DEPTH(DEPTH)) mem (
     .clk, .rst_n, .address(m_address), .read(m_read), .write(1'b0), .writedata('0),

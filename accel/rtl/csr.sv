@@ -6,7 +6,7 @@
 //   0x00 VERSION     R    design id / version
 //   0x04 CTRL        W    [0] START  [1] RESET_SOFT  [2] IRQ_EN (level)  [3] CLEAR_ERR
 //   0x08 STATUS      R    [0] BUSY  [1] DONE  [2] ERROR
-//   0x0C ERR_CODE    R    last error code (0 = none)
+//   0x0C ERR_CODE    R    last error code (0 = none; 7 = DMA address outside the window)
 //   0x10 OP          RW   operation type and flags
 //   0x14 DIM_M       RW
 //   0x18 DIM_N       RW

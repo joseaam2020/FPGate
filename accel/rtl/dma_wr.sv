@@ -10,8 +10,13 @@
 // until the slave takes it. It is then "stale": no wr_beat/err is reported for it. The
 // burst length is 1, so there are no missing beats of a started burst to pad with
 // byteenable = 0.
+//
+// Address window guard: a beat outside [ADDR_LO, ADDR_HI) is consumed but never put on the bus;
+// `err_win` pulses once. The check only feeds the registers, not the Avalon port.
 module dma_wr #(
-  parameter int TIMEOUT = 4096
+  parameter int TIMEOUT = 4096,
+  parameter logic [31:0] ADDR_LO = 32'h3000_0000,
+  parameter logic [31:0] ADDR_HI = 32'h4000_0000
 )(
   input  logic         clk,
   input  logic         rst_n,          // hard reset only (drops a pending beat)
@@ -24,6 +29,7 @@ module dma_wr #(
   output logic         busy,
   output logic         wr_beat,        // 1-cycle pulse per beat written
   output logic         err,            // 1-cycle pulse
+  output logic         err_win,        // 1-cycle pulse (beat outside [ADDR_LO, ADDR_HI))
   // Avalon-MM master (write only)
   output logic [31:0]  m_address,
   output logic         m_write,
@@ -36,6 +42,8 @@ module dma_wr #(
   logic        stale;
   logic [31:0] tmo;
 
+  wire win_ok = (in_addr >= ADDR_LO) && ({1'b0, in_addr} + 33'd32 <= {1'b0, ADDR_HI});
+
   assign m_write      = pending;
   assign m_burstcount = 8'd1;
   assign busy         = pending;
@@ -44,6 +52,7 @@ module dma_wr #(
   always_ff @(posedge clk) begin
     wr_beat <= 1'b0;
     err     <= 1'b0;
+    err_win <= 1'b0;
     if (!rst_n) begin
       pending <= 1'b0;
       stale   <= 1'b0;
@@ -68,7 +77,8 @@ module dma_wr #(
         m_address    <= in_addr;
         m_writedata  <= in_data;
         m_byteenable <= in_be;
-        pending      <= 1'b1;
+        pending      <= win_ok;
+        err_win      <= !win_ok;
       end
     end
   end

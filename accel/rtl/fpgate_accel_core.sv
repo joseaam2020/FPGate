@@ -10,7 +10,9 @@ module fpgate_accel_core #(
   parameter int A_BEATS  = 8192,
   parameter int W_BEATS  = 1024,
   parameter int LANES    = 4,
-  parameter int SM_LANES = 4
+  parameter int SM_LANES = 4,
+  parameter logic [31:0] ADDR_LO = 32'h3000_0000,
+  parameter logic [31:0] ADDR_HI = 32'h4000_0000
 )(
   input  logic         clk,
   input  logic         rst_n,
@@ -72,7 +74,7 @@ module fpgate_accel_core #(
     .hw_done, .hw_err_valid, .hw_err_code, .bytes_rd, .bytes_wr
   );
 
-  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(LANES)) u_engine (
+  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(LANES), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_engine (
     .clk, .rst_n, .start, .soft_reset,
     .op, .dim_m, .dim_n, .dim_k, .addr_a, .addr_w, .addr_out, .stride_out,
     .hw_done, .hw_err_valid, .hw_err_code, .bytes_rd, .bytes_wr,
@@ -101,7 +103,7 @@ module fpgate_accel_core #(
     .bytes_rd(sm_bytes_rd), .bytes_wr(sm_bytes_wr)
   );
 
-  attn_softmax #(.LANES2(SM_LANES)) u_softmax (
+  attn_softmax #(.LANES2(SM_LANES), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_softmax (
     .clk, .rst_n, .start(sm_start), .soft_reset(sm_soft_reset),
     .rows(sm_rows), .cols(sm_cols), .kp(sm_kp),
     .s_addr(sm_addr_s), .s_stride(sm_stride_s), .p_addr(sm_addr_p), .sm_m0, .sm_sh,

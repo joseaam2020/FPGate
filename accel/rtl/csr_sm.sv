@@ -5,7 +5,7 @@
 //   0x00 VERSION     R    'S''M' . version 0002
 //   0x04 CTRL        W    [0] START  [1] RESET_SOFT  [3] CLEAR_ERR
 //   0x08 STATUS      R    [0] BUSY  [1] DONE  [2] ERROR
-//   0x0C ERR_CODE    R    1 START while BUSY, 2 bad parameters, 3 read timeout, 4 write timeout, 6 watchdog
+//   0x0C ERR_CODE    R    1 START while BUSY, 2 bad parameters, 3 read timeout, 4 write timeout, 5 output FIFO overflow, 6 watchdog, 7 DMA address outside the window
 //   0x10 ROWS        RW   query rows to process
 //   0x14 COLS        RW   valid keys per row (1025)
 //   0x18 KP          RW   k extent of P (even, >= COLS), 1026

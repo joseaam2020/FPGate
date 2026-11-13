@@ -10,7 +10,7 @@ module tb_dma_wr;
   always #3.333 clk = ~clk;
 
   logic         flush = 1'b0;
-  logic         in_valid, in_ready, busy, wr_beat, err;
+  logic         in_valid, in_ready, busy, wr_beat, err, err_win;
   logic [31:0]  in_addr, in_be;
   logic [255:0] in_data;
 
@@ -19,7 +19,7 @@ module tb_dma_wr;
   logic [255:0] m_writedata;
   logic [7:0]   m_burstcount;
 
-  dma_wr #(.TIMEOUT(200)) dut (.*);
+  dma_wr #(.TIMEOUT(200), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   avalon_mem_model #(.DEPTH(DEPTH)) mem (
     .clk, .rst_n, .address(m_address), .read(1'b0), .write(m_write), .writedata(m_writedata),

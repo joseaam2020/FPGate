@@ -27,7 +27,7 @@ module tb_attn_softmax;
   logic [7:0]   rd_burstcount, wr_burstcount;
   logic [255:0] rd_readdata, wr_writedata;
 
-  attn_softmax #(.LANES2(4), .ROW_WORDS(130)) dut (.*);
+  attn_softmax #(.LANES2(4), .ROW_WORDS(130), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   avalon_mem_model #(.DEPTH(DEPTH)) mem_r (
     .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),

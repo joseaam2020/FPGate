@@ -32,7 +32,7 @@ module tb_attn_core;
   logic [7:0]   rd_burstcount, wr_burstcount, rd2_burstcount, wr2_burstcount;
   logic [255:0] rd_readdata, wr_writedata, rd2_readdata, wr2_writedata;
 
-  fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4)) dut (.*);
+  fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
   cyc_mon mon();
 
   avalon_mem_model #(.DEPTH(DEPTH)) m_er (

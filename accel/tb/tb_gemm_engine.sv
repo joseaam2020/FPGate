@@ -29,7 +29,7 @@ module tb_gemm_engine;
   logic [7:0]   rd_burstcount, wr_burstcount;
   logic [255:0] rd_readdata, wr_writedata;
 
-  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(4), .WD_LIMIT(20000), .DMA_TIMEOUT(300)) dut (.*);
+  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(4), .WD_LIMIT(20000), .DMA_TIMEOUT(300), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   // one memory behind both masters: the read model serves reads, the write model serves
   // writes; both share the same backing array through hierarchical access in the checker

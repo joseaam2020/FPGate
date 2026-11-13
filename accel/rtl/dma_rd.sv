@@ -5,13 +5,19 @@
 // Bursts are at most BURST beats and never cross a 4 KiB boundary. If a burst gets
 // no data for TIMEOUT cycles the command is aborted with `err`.
 //
+// Address window guard: a burst that starts below ADDR_LO or ends above ADDR_HI (exclusive) is
+// never issued; `err_win` pulses once and the command is abandoned. The check is made while the
+// burst is prepared (S_PREP) and only feeds the state register, not the Avalon port.
+//
 // On `flush` (soft reset / abort) or after a timeout the unit does not drop what is on the
 // bus: a request that is waiting for the slave is held until accepted, and the beats the slave
 // still owes for an accepted burst are consumed (S_DRAIN, bounded by TIMEOUT) before the unit
 // is ready again, so stale data never leaks into the next command.
 module dma_rd #(
   parameter int BURST   = 16,
-  parameter int TIMEOUT = 4096
+  parameter int TIMEOUT = 4096,
+  parameter logic [31:0] ADDR_LO = 32'h3000_0000,
+  parameter logic [31:0] ADDR_HI = 32'h4000_0000
 )(
   input  logic         clk,
   input  logic         rst_n,          // hard reset only
@@ -24,6 +30,7 @@ module dma_rd #(
   output logic         busy,
   output logic         done,            // 1-cycle pulse
   output logic         err,             // 1-cycle pulse (timeout)
+  output logic         err_win,         // 1-cycle pulse (burst outside [ADDR_LO, ADDR_HI))
   // stream
   output logic         beat_valid,
   output logic [255:0] beat_data,
@@ -54,6 +61,12 @@ module dma_rd #(
     if (to_bound < bl_next) bl_next = to_bound;
   end
 
+  // window check of the burst about to be requested (33-bit end so it cannot wrap)
+  logic win_bad;
+  always_comb begin
+    win_bad = (addr < ADDR_LO) || ({1'b0, addr} + {17'b0, bl_next, 5'b0} > {1'b0, ADDR_HI});
+  end
+
   assign cmd_ready    = (state == S_IDLE) && !flush;
   assign busy         = (state != S_IDLE);
   assign m_read       = (state == S_REQ);
@@ -66,6 +79,7 @@ module dma_rd #(
   always_ff @(posedge clk) begin
     done <= 1'b0;
     err  <= 1'b0;
+    err_win <= 1'b0;
     if (!rst_n) begin
       state   <= S_IDLE;
       idx     <= '0;
@@ -83,7 +97,14 @@ module dma_rd #(
         end
         S_PREP: begin
           bl    <= bl_next;
-          state <= flush ? S_IDLE : S_REQ;
+          if (flush) begin
+            state <= S_IDLE;
+          end else if (win_bad) begin
+            err_win <= 1'b1;               // nothing was put on the bus: just abandon the command
+            state   <= S_IDLE;
+          end else begin
+            state <= S_REQ;
+          end
         end
         S_REQ: if (!m_waitrequest) begin
           got   <= '0;

@@ -33,7 +33,7 @@ module tb_raw32;
   logic         rd2_waitrequest = 0, rd2_readdatavalid = 0, wr2_waitrequest = 0;
   logic [255:0] rd2_readdata = '0;
 
-  fpgate_accel_core #(.A_BEATS(4096), .W_BEATS(1024), .LANES(4)) dut (.*);
+  fpgate_accel_core #(.A_BEATS(4096), .W_BEATS(1024), .LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   avalon_mem_model #(.DEPTH(DEPTH)) mem_r (
     .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),

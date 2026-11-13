@@ -12,14 +12,16 @@
 // k positions from cols to kp-1 and the rows past the last row.
 //
 // Control is by plain inputs (the CSR block of fpgate_accel_core drives them); `done` and `err_valid` are
-// one-cycle pulses. Error codes: 2 bad parameters, 3 read timeout, 4 write timeout, 6 watchdog.
+// one-cycle pulses. Error codes: 2 bad parameters, 3 read timeout, 4 write timeout, 6 watchdog, 7 address outside the DMA window.
 module attn_softmax
 #(
   parameter int LANES2      = 4,        // columns per cycle in the exponent pass (4 or 8)
   parameter int ROW_WORDS   = 130,      // 256-bit words per score row buffer (>= ceil(cols / 8))
   parameter int BURST       = 16,
   parameter int DMA_TIMEOUT = 4096,
-  parameter int WD_LIMIT    = 1 << 20
+  parameter int WD_LIMIT    = 1 << 20,
+  parameter logic [31:0] ADDR_LO = 32'h3000_0000,
+  parameter logic [31:0] ADDR_HI = 32'h4000_0000
 )(
   input  logic         clk,
   input  logic         rst_n,
@@ -82,7 +84,7 @@ module attn_softmax
   logic [31:0] wd;
 
   // ---- DMA ----------------------------------------------------------------------------------------
-  logic         rd_cmd_ready, rd_busy, rd_done, rd_err;
+  logic         rd_cmd_ready, rd_busy, rd_done, rd_err, rd_win_err, wr_win_err;
   logic         beat_valid;
   logic [255:0] beat_data;
   logic [15:0]  beat_idx;
@@ -91,10 +93,10 @@ module attn_softmax
   // the DMAs survive a soft reset / error: they finish the bus transaction in flight (see dma_wr, dma_rd)
   wire dma_flush = soft_reset | (state == S_ERR);
 
-  dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT)) u_dma_rd (
+  dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_dma_rd (
     .clk, .rst_n, .flush(dma_flush),
     .cmd_valid(rd_cmd_valid), .cmd_ready(rd_cmd_ready), .cmd_addr(s_cur), .cmd_beats(nw),
-    .busy(rd_busy), .done(rd_done), .err(rd_err),
+    .busy(rd_busy), .done(rd_done), .err(rd_err), .err_win(rd_win_err),
     .beat_valid, .beat_data, .beat_idx,
     .m_address(rd_address), .m_read(rd_read), .m_burstcount(rd_burstcount),
     .m_waitrequest(rd_waitrequest), .m_readdata(rd_readdata), .m_readdatavalid(rd_readdatavalid)
@@ -104,11 +106,11 @@ module attn_softmax
   logic [31:0]  wr_in_addr;
   logic [255:0] wr_in_data;
 
-  dma_wr #(.TIMEOUT(DMA_TIMEOUT)) u_dma_wr (
+  dma_wr #(.TIMEOUT(DMA_TIMEOUT), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_dma_wr (
     .clk, .rst_n, .flush(dma_flush),
     .in_valid(wr_in_valid), .in_ready(wr_in_ready),
     .in_addr(wr_in_addr), .in_data(wr_in_data), .in_be(32'hFFFF_FFFF),
-    .busy(wr_busy), .wr_beat, .err(wr_err),
+    .busy(wr_busy), .wr_beat, .err(wr_err), .err_win(wr_win_err),
     .m_address(wr_address), .m_write(wr_write), .m_writedata(wr_writedata),
     .m_byteenable(wr_byteenable), .m_burstcount(wr_burstcount), .m_waitrequest(wr_waitrequest)
   );
@@ -412,6 +414,7 @@ module attn_softmax
       if (wd >= 32'(WD_LIMIT) && state != S_IDLE) begin next_err <= 8'd6; state <= S_ERR; end
       else if (rd_err && state != S_IDLE)       begin next_err <= 8'd3; state <= S_ERR; end
       else if (wr_err && state != S_IDLE)       begin next_err <= 8'd4; state <= S_ERR; end
+      else if ((rd_win_err || wr_win_err) && state != S_IDLE) begin next_err <= 8'd7; state <= S_ERR; end
       else case (state)
         S_IDLE: if (start) begin
           rows_q <= rows; cols_q <= cols; kp_q <= kp;

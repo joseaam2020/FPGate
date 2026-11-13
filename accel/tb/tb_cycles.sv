@@ -50,7 +50,7 @@ module tb_cycles #(
   logic         rd2_waitrequest = 0, rd2_readdatavalid = 0, wr2_waitrequest = 0;
   logic [255:0] rd2_readdata = '0;
 
-  fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4)) dut (.*);
+  fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
   cyc_mon #(.SM(0)) mon();
 
   avalon_mem_model #(.DEPTH(DEPTH), .WAIT_PCT(WAIT_PCT), .GAP_PCT(GAP_PCT), .LAT(LAT)) mem_r (

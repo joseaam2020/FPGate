@@ -18,7 +18,9 @@ module gemm_engine
   parameter int OUT_FIFO    = 32,
   parameter int WD_LIMIT    = 1 << 20,
   parameter int DMA_TIMEOUT = 4096,
-  parameter int BURST       = 16
+  parameter int BURST       = 16,
+  parameter logic [31:0] ADDR_LO = 32'h3000_0000,
+  parameter logic [31:0] ADDR_HI = 32'h4000_0000
 )(
   input  logic         clk,
   input  logic         rst_n,
@@ -95,7 +97,7 @@ module gemm_engine
   logic         beat_valid;
   logic [255:0] beat_data;
   logic [15:0]  beat_idx;
-  logic         dma_rd_busy, tgt_a, rd_done_dma;
+  logic         dma_rd_busy, tgt_a, rd_done_dma, rd_win_err;
 
   // The buffers register their write side WR_PIPE times; the sequencer must not see "done"
   // before the last beat is really in the RAM (one extra cycle of margin).
@@ -107,11 +109,11 @@ module gemm_engine
   end
   assign rd_done = rd_done_sr[RD_DONE_DLY-1];
 
-  dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT)) u_dma_rd (
+  dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_dma_rd (
     .clk, .rst_n, .flush(dma_flush),
     .cmd_valid(rd_cmd_valid), .cmd_ready(rd_cmd_ready),
     .cmd_addr(rd_cmd_addr), .cmd_beats(rd_cmd_beats),
-    .busy(dma_rd_busy), .done(rd_done_dma), .err(rd_err),
+    .busy(dma_rd_busy), .done(rd_done_dma), .err(rd_err), .err_win(rd_win_err),
     .beat_valid, .beat_data, .beat_idx,
     .m_address(rd_address), .m_read(rd_read), .m_burstcount(rd_burstcount),
     .m_waitrequest(rd_waitrequest), .m_readdata(rd_readdata), .m_readdatavalid(rd_readdatavalid)
@@ -236,7 +238,7 @@ module gemm_engine
     end
   end
 
-  logic         wr_in_valid, wr_in_ready, wr_busy, wr_beat, wr_err;
+  logic         wr_in_valid, wr_in_ready, wr_busy, wr_beat, wr_err, wr_win_err;
   wire push = row_valid && (rcnt < rows_valid_q);
 
   localparam int FW = $clog2(OUT_FIFO);
@@ -289,11 +291,11 @@ module gemm_engine
   assign fifo_head   = fifo_mem[rp[FW-1:0]];
   assign wr_in_valid = !fifo_empty;
 
-  dma_wr #(.TIMEOUT(DMA_TIMEOUT)) u_dma_wr (
+  dma_wr #(.TIMEOUT(DMA_TIMEOUT), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_dma_wr (
     .clk, .rst_n, .flush(dma_flush),
     .in_valid(wr_in_valid), .in_ready(wr_in_ready),
     .in_addr(fifo_head[287:256]), .in_data(fifo_head[255:0]), .in_be(fifo_head[319:288]),
-    .busy(wr_busy), .wr_beat, .err(wr_err),
+    .busy(wr_busy), .wr_beat, .err(wr_err), .err_win(wr_win_err),
     .m_address(wr_address), .m_write(wr_write), .m_writedata(wr_writedata),
     .m_byteenable(wr_byteenable), .m_burstcount(wr_burstcount), .m_waitrequest(wr_waitrequest)
   );
@@ -321,8 +323,9 @@ module gemm_engine
 
   // ---- errors, progress, counters ----------------------------------------------------------
   always_comb begin
-    ext_err_valid = wr_err || overflow;
-    ext_err_code  = wr_err ? 8'd4 : 8'd5;
+    // 4 write timeout, 7 address window violation, 5 output FIFO overflow
+    ext_err_valid = wr_err || rd_win_err || wr_win_err || overflow;
+    ext_err_code  = wr_err ? 8'd4 : (rd_win_err || wr_win_err) ? 8'd7 : 8'd5;
   end
   assign progress = beat_valid || wr_beat || in_valid || push;
 

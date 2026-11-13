@@ -28,7 +28,7 @@ module tb_engine_real;
   logic [7:0]   rd_burstcount, wr_burstcount;
   logic [255:0] rd_readdata, wr_writedata;
 
-  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(4)) dut (.*);
+  gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
   avalon_mem_model #(.DEPTH(DEPTH)) mem_r (
     .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),
