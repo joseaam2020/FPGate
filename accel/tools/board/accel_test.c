@@ -475,6 +475,7 @@ static int test_concurrent(int rows, int reps)
         fprintf(stderr, "rows must be in 1..1025\n");
         return 2;
     }
+    accel_hw_set_cached(0);     /* this tool copies into the region itself, without cache maintenance */
     if (accel_hw_open(&hw, 0x8000000u) != 0)
         return 2;
     if (!hw.has_softmax) {

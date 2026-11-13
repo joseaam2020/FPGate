@@ -234,6 +234,7 @@ static int linear_fpga_seq(model_t *m, const layer_t *L, int rows, int16_t *out)
         else
             fpga_pack_acts16(m->a16, rows, K, m->stage);
         memcpy(m->hw->region + FPGA_A_OFF, m->stage, bytes);
+        accel_hw_clean(m->hw, FPGA_A_OFF, bytes);
         m->a_ok = 1; m->a_rows = rows; m->a_k = K; m->a_bits = L->in_bits;
     }
     double t1 = now_s();
@@ -248,6 +249,7 @@ static int linear_fpga_seq(model_t *m, const layer_t *L, int rows, int16_t *out)
     }
     double t2 = now_s();
     const size_t n = (size_t)rows * N;
+    accel_hw_inval(m->hw, FPGA_O_OFF, n * (out16 ? 2 : 1));
     memcpy(m->rdbuf, m->hw->region + FPGA_O_OFF, n * (out16 ? 2 : 1));
     if (out16)
         memcpy(out, m->rdbuf, n * 2);
@@ -293,6 +295,7 @@ static void pack_chunk(model_t *m, const layer_t *L, int row0, int nrows)
     else
         fpga_pack_acts16(m->a16 + (size_t)row0 * K, nrows, K, m->stage + off);
     memcpy(m->hw->region + FPGA_A_OFF + off, m->stage + off, bytes);
+    accel_hw_clean(m->hw, FPGA_A_OFF + off, bytes);
 }
 
 /* read rows [row0, row0 + nrows) of the output matrix into out (int16 container) */
@@ -302,6 +305,7 @@ static void read_chunk(model_t *m, const layer_t *L, int row0, int nrows, int16_
     const size_t esz = out16 ? 2 : 1, n = (size_t)nrows * N;
     const uint8_t *src = m->hw->region + FPGA_O_OFF + (size_t)row0 * N * esz;
     uint8_t *tmp = m->rdbuf + (size_t)row0 * N * esz;
+    accel_hw_inval(m->hw, FPGA_O_OFF + (size_t)row0 * N * esz, n * esz);
     memcpy(tmp, src, n * esz);
     if (out16)
         memcpy(out + (size_t)row0 * N, tmp, n * 2);
@@ -565,6 +569,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
             fpga_pack_acts16(m->pl_a16[slot], nr, K, m->pl_stage[slot]);
         memcpy(m->hw->region + FPGA_A_OFF + (size_t)slot * m->pl_slot, m->pl_stage[slot],
                fpga_acts_bytes(nr, K, planes));
+        accel_hw_clean(m->hw, FPGA_A_OFF + (size_t)slot * m->pl_slot, fpga_acts_bytes(nr, K, planes));
         PL_LAP(pl_pack);
         break;
     }
@@ -574,6 +579,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         const size_t n = (size_t)nr * N;
         const uint8_t *src = m->hw->region + FPGA_O_OFF + (size_t)slot * m->pl_slot;
         int16_t *dst = s->dst + (size_t)r0 * N;
+        accel_hw_inval(m->hw, FPGA_O_OFF + (size_t)slot * m->pl_slot, n * (out16 ? 2 : 1));
         if (out16)
             memcpy(dst, src, n * 2);
         else {
@@ -815,6 +821,7 @@ static int patch_fpga(model_t *m, const layer_t *L, int rows)
         return -1;
     fpga_pack_acts8(m->a8, rows, K, m->stage);
     memcpy(m->hw->region + FPGA_A_OFF, m->stage, fpga_acts_bytes(rows, K, 1));
+    accel_hw_clean(m->hw, FPGA_A_OFF, fpga_acts_bytes(rows, K, 1));
     m->a_ok = 0;
     accel_op_t op = {.M = (uint32_t)rows, .N = (uint32_t)N, .K = (uint32_t)K, .in_bits = 8, .out_bits = 32,
                      .spp = 16, .a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF, .w_phys = ACCEL_REGION_PHYS + m->w_off[wi],
@@ -822,6 +829,7 @@ static int patch_fpga(model_t *m, const layer_t *L, int rows)
     accel_stat_t st;
     if (accel_hw_run(m->hw, &op, &st, 60.0) != 0)
         return -1;
+    accel_hw_inval(m->hw, FPGA_O_OFF, n * 4);
     memcpy(m->acc, m->hw->region + FPGA_O_OFF, n * 4);
     m->st.ops++;
     m->st.cycles += st.cycles;
@@ -1082,12 +1090,15 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
         n = fpga_acts_bytes(T, hd, 1);
         fpga_pack_acts8_strided(m->q8 + (size_t)h * hd, T, hd, A, m->att_stage);
         memcpy(hw->region + ATT_Q, m->att_stage, n);
+        accel_hw_clean(hw, ATT_Q, n);
         n = fpga_kt_bytes(T, hd);
         fpga_pack_kt(m->k8 + (size_t)h * hd, T, A, hd, m->att_stage);
         memcpy(hw->region + ATT_K, m->att_stage, n);
+        accel_hw_clean(hw, ATT_K, n);
         n = fpga_v_bytes(hd, KP);
         fpga_pack_v(m->v8 + (size_t)h * hd, T, A, hd, KP, (int32_t)B->av_m0, (int)B->av_sh, m->att_stage);
         memcpy(hw->region + ATT_V, m->att_stage, n);
+        accel_hw_clean(hw, ATT_V, n);
         double t1 = now_s();
         if (g_tr)
             tr_add("cpu", "att_pack", h, t0, t1, 0);
@@ -1133,6 +1144,7 @@ static int attention_fpga(model_t *m, const block_t *B, int T, int A, int H, int
         m->st.t_att_pv += t4 - t3;
     }
     double t5 = now_s();
+    accel_hw_inval(hw, ATT_C, (size_t)T * A);
     memcpy(m->ctx8, hw->region + ATT_C, (size_t)T * A);
     m->st.t_att_read += now_s() - t5;
 
@@ -1295,12 +1307,15 @@ static int attention_fpga_ovl(model_t *m, const block_t *B, int T, int A, int H,
             n = fpga_acts_bytes(T, hd, 1);
             fpga_pack_acts8_strided(m->q8 + (size_t)h * hd, T, hd, A, m->att_stage);
             memcpy(hw->region + ATT2_Q(p), m->att_stage, n);
+            accel_hw_clean(hw, ATT2_Q(p), n);
             n = fpga_kt_bytes(T, hd);
             fpga_pack_kt(m->k8 + (size_t)h * hd, T, A, hd, m->att_stage);
             memcpy(hw->region + ATT2_K(p), m->att_stage, n);
+            accel_hw_clean(hw, ATT2_K(p), n);
             n = fpga_v_bytes(hd, KP);
             fpga_pack_v(m->v8 + (size_t)h * hd, T, A, hd, KP, (int32_t)B->av_m0, (int)B->av_sh, m->att_stage);
             memcpy(hw->region + ATT2_V(p), m->att_stage, n);
+            accel_hw_clean(hw, ATT2_V(p), n);
             const double t1 = now_s();
             m->st.t_att_pack += t1 - t0;
             if (g_tr)
@@ -1323,6 +1338,7 @@ fail:
     }
 
     double t5 = now_s();
+    accel_hw_inval(hw, ATT_C, (size_t)T * A);
     memcpy(m->ctx8, hw->region + ATT_C, (size_t)T * A);
     m->st.t_att_read += now_s() - t5;
 
@@ -1391,6 +1407,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
         }
         fpga_pack_weights(L, tile);
         memcpy(hw->region + off, tile, bytes);
+        accel_hw_clean(hw, off, bytes);
         m->w_off[i] = off;
         off = (off + (uint32_t)bytes + 63u) & ~63u;
         n_fpga++;

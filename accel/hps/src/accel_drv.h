@@ -25,6 +25,8 @@ typedef struct accel_hw {
     volatile uint8_t *csr;
     uint8_t *region;
     size_t region_len;
+    int mem_fd;                 /* /dev/fpgate_mem when the region is mapped cached, else -1 */
+    int cached;                 /* the region mapping is write-back cached: accel_hw_clean/inval are required */
     double mhz;                 /* accelerator clock measured with HEARTBEAT at open */
     int hw_version;             /* engine VERSION low half: 1 = h5, 2 = h5b (output FIFO credit, clean abort) */
     int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
@@ -53,6 +55,15 @@ typedef struct {
 /* returns 0 on success; messages go to stderr */
 int accel_hw_open(accel_hw_t *h, size_t region_len);
 void accel_hw_close(accel_hw_t *h);
+
+/* Region mapping mode, set before accel_hw_open: 1 = cached through /dev/fpgate_mem (fail if absent),
+ * 0 = uncached through /dev/mem, -1 = cached when the module is loaded, else uncached (default). */
+void accel_hw_set_cached(int mode);
+int accel_hw_is_cached(const accel_hw_t *h);
+/* Cache maintenance on [off, off + len) of the region; no-ops on an uncached mapping and on the software model.
+ * clean: after the CPU wrote data the accelerator will read. inval: before the CPU reads what the accelerator wrote. */
+void accel_hw_clean(const accel_hw_t *h, size_t off, size_t len);
+void accel_hw_inval(const accel_hw_t *h, size_t off, size_t len);
 
 typedef struct {
     uint32_t rows, cols, kp;

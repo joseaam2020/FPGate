@@ -5,9 +5,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../../tools/kmod/fpgate_mem.h"
+
+static int g_cached_mode = -1;      /* accel_hw_set_cached */
 
 #define LW_BASE 0xFF200000u
 #define LW_LEN 0x1000u
@@ -86,6 +91,7 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
                         "touching its registers would hang the board. See accel/tools/board/README.md\n");
         return -1;
     }
+    h->mem_fd = -1;
     h->fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (h->fd < 0) {
         perror("accel: open /dev/mem (run as root)");
@@ -97,10 +103,27 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
         return -1;
     }
     h->csr = c;
-    void *r = mmap(NULL, region_len, PROT_READ | PROT_WRITE, MAP_SHARED, h->fd, ACCEL_REGION_PHYS);
+    void *r = MAP_FAILED;
+    if (g_cached_mode != 0) {
+        h->mem_fd = open(FPGATE_MEM_PATH, O_RDWR);
+        if (h->mem_fd >= 0) {
+            r = mmap(NULL, region_len, PROT_READ | PROT_WRITE, MAP_SHARED, h->mem_fd, 0);
+            if (r == MAP_FAILED) {
+                perror("accel: mmap " FPGATE_MEM_PATH);
+                return -1;
+            }
+            h->cached = 1;
+        } else if (g_cached_mode > 0) {
+            perror("accel: open " FPGATE_MEM_PATH " (insmod fpgate_mem.ko)");
+            return -1;
+        }
+    }
     if (r == MAP_FAILED) {
-        perror("accel: mmap DDR3 region");
-        return -1;
+        r = mmap(NULL, region_len, PROT_READ | PROT_WRITE, MAP_SHARED, h->fd, ACCEL_REGION_PHYS);
+        if (r == MAP_FAILED) {
+            perror("accel: mmap DDR3 region");
+            return -1;
+        }
     }
     h->region = r;
     h->region_len = region_len;
@@ -143,10 +166,46 @@ void accel_hw_close(accel_hw_t *h)
         munmap(h->region, h->region_len);
     if (h->csr)
         munmap((void *)h->csr, LW_LEN);
+    if (h->mem_fd >= 0)
+        close(h->mem_fd);
     if (h->fd >= 0)
         close(h->fd);
     memset(h, 0, sizeof *h);
     h->fd = -1;
+    h->mem_fd = -1;
+}
+
+void accel_hw_set_cached(int mode)
+{
+    g_cached_mode = mode;
+}
+
+int accel_hw_is_cached(const accel_hw_t *h)
+{
+    return h->cached;
+}
+
+static void cache_op(const accel_hw_t *h, unsigned long req, size_t off, size_t len, const char *what)
+{
+    if (!h->cached || h->sim || len == 0)
+        return;
+    if (off > h->region_len || len > h->region_len - off) {
+        fprintf(stderr, "accel: cache %s outside the region (off %zu len %zu)\n", what, off, len);
+        return;
+    }
+    struct fpgate_mem_range r = {.offset = (uint32_t)off, .len = (uint32_t)len};
+    if (ioctl(h->mem_fd, req, &r) != 0)
+        perror(what);
+}
+
+void accel_hw_clean(const accel_hw_t *h, size_t off, size_t len)
+{
+    cache_op(h, FPGATE_MEM_CLEAN, off, len, "accel: cache clean");
+}
+
+void accel_hw_inval(const accel_hw_t *h, size_t off, size_t len)
+{
+    cache_op(h, FPGATE_MEM_INVAL, off, len, "accel: cache invalidate");
 }
 
 int accel_hw_start(accel_hw_t *h, const accel_op_t *op)

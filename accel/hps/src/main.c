@@ -606,6 +606,10 @@ int main(int argc, char **argv)
             g_opt.att_overlap = ATT_OVL_FORCE;
         else if (!strcmp(argv[i], "--cpu-patch"))
             g_opt.cpu_patch = 1;
+        else if (!strcmp(argv[i], "--cached"))
+            accel_hw_set_cached(1);
+        else if (!strcmp(argv[i], "--uncached"))
+            accel_hw_set_cached(0);
         else if (!strcmp(argv[i], "--trace") && i + 1 < argc) {
             if (model_trace_open(argv[++i]) != 0) {
                 fprintf(stderr, "--trace: out of memory\n");
