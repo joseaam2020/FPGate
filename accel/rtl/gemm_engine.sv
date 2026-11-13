@@ -101,7 +101,7 @@ module gemm_engine
 
   // The buffers register their write side WR_PIPE times; the sequencer must not see "done"
   // before the last beat is really in the RAM (one extra cycle of margin).
-  localparam int RD_DONE_DLY = 3;
+  localparam int RD_DONE_DLY = 4;
   logic [RD_DONE_DLY-1:0] rd_done_sr;
   always_ff @(posedge clk) begin
     if (!rst_dp) rd_done_sr <= '0;

@@ -11,7 +11,7 @@ module tile_buffers
   parameter int A_BEATS = 8192,     // 256-bit entries in the A RAM (256 KiB)
   parameter int W_BEATS = 1024,     // 256-bit entries per weight buffer (K up to 2048)
   parameter int COLS    = PE_COLS,
-  parameter int WR_PIPE = 2         // register stages on the write side (see below)
+  parameter int WR_PIPE = 3         // register stages on the write side (see below)
 )(
   input  logic                            clk,
   // A panel RAM
@@ -64,9 +64,6 @@ module tile_buffers
     end
   end
 
-  wire                       a_we_q    = a_we_p[WR_PIPE-1];
-  wire [$clog2(A_BEATS)-1:0] a_waddr_q = a_waddr_p[WR_PIPE-1];
-  wire [255:0]               a_wdata_q = a_wdata_p[WR_PIPE-1];
   wire                       w_we_q    = w_we_p[WR_PIPE-1];
   wire [$clog2(W_BEATS)-1:0] w_waddr_q = w_waddr_p[WR_PIPE-1];
   wire [255:0]               w_wdata_q = w_wdata_p[WR_PIPE-1];
@@ -76,15 +73,30 @@ module tile_buffers
   wire [255:0]               c_wdata_q = c_wdata_p[WR_PIPE-1];
 
   // ---- A RAM ----------------------------------------------------------------
-  logic [255:0] a_mem [A_BEATS];
+  // The A RAM is split in 8-bit data slices (32 of them, a few M10K each). The last write stage is replicated per
+  // slice (address and enable), so that each copy feeds at most 8 M10K blocks.
+  localparam int A_SLICES = 32;
   logic [255:0] a_q;
   logic         a_half;
 
-  always_ff @(posedge clk) begin
-    if (a_we_q) a_mem[a_waddr_q] <= a_wdata_q;
-    a_q    <= a_mem[a_raddr[$clog2(A_BEATS):1]];
-    a_half <= a_raddr[0];
-  end
+  genvar gs;
+  generate
+    for (gs = 0; gs < A_SLICES; gs++) begin : g_a
+      (* preserve *) logic                       we_r;
+      (* preserve *) logic [$clog2(A_BEATS)-1:0] wa_r;
+      (* preserve *) logic [7:0]                 wd_r;
+      logic [7:0] mem [A_BEATS];
+      always_ff @(posedge clk) begin
+        we_r <= a_we_p[WR_PIPE-2];
+        wa_r <= a_waddr_p[WR_PIPE-2];
+        wd_r <= a_wdata_p[WR_PIPE-2][8*gs +: 8];
+        if (we_r) mem[wa_r] <= wd_r;
+        a_q[8*gs +: 8] <= mem[a_raddr[$clog2(A_BEATS):1]];
+      end
+    end
+  endgenerate
+
+  always_ff @(posedge clk) a_half <= a_raddr[0];
   assign a_rdata = a_half ? a_q[255:128] : a_q[127:0];
 
   // ---- weight buffers ---------------------------------------------------------

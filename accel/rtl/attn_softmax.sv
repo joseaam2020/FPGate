@@ -143,12 +143,16 @@ module attn_softmax
     return (a > b) ? a : b;
   endfunction
 
+  // the masked words are registered before the comparison tree (one extra stage, covered by the S_RD drain)
+  logic               m_v0;
+  logic signed [31:0] m_w [8];
+
   always_ff @(posedge clk) begin
-    logic signed [31:0] w8 [8];
+    m_v0 <= bv_q && (state == S_RD);
     for (int l = 0; l < 8; l++)
-      w8[l] = ((int'(bi_q) * 8 + l) < int'(cols_q)) ? bd_q[32*l +: 32] : 32'sh8000_0000;
-    m_v1 <= bv_q && (state == S_RD);
-    for (int i = 0; i < 4; i++) m_a[i] <= smax(w8[2*i], w8[2*i+1]);
+      m_w[l] <= ((int'(bi_q) * 8 + l) < int'(cols_q)) ? bd_q[32*l +: 32] : 32'sh8000_0000;
+    m_v1 <= m_v0;
+    for (int i = 0; i < 4; i++) m_a[i] <= smax(m_w[2*i], m_w[2*i+1]);
     m_v2 <= m_v1;
     for (int i = 0; i < 2; i++) m_b[i] <= smax(m_a[2*i], m_a[2*i+1]);
     m_v3 <= m_v2;
@@ -334,14 +338,30 @@ module attn_softmax
     for (int l = 0; l < 8; l++) p3_word[16*l +: 16] = p3_p[l];
   end
 
-  // 16 row RAMs: one 128-bit word (8 columns) per address
-  logic [127:0] pram_q [16];
+  // 16 row RAMs: one 128-bit word (8 columns) per address. The write side fans out through a 2-level
+  // registered tree: 4 group copies here (each drives 4 RAMs), then the input registers of each RAM.
+  logic [127:0]  pram_q [16];
   logic [AW-1:0] out_a;
+  logic          g_tv   [4];
+  logic [AW-1:0] g_tw   [4];
+  logic [127:0]  g_word [4];
+  logic [4:0]    g_row  [4];
   generate
+    for (gl = 0; gl < 4; gl++) begin : g_pgrp
+      (* preserve *) logic          tv_r;
+      (* preserve *) logic [AW-1:0] tw_r;
+      (* preserve *) logic [127:0]  word_r;
+      (* preserve *) logic [4:0]    row_r;
+      always_ff @(posedge clk) begin
+        tv_r <= p3_tv[P3_LAT-1];  tw_r <= AW'(p3_tw[P3_LAT-1]);
+        word_r <= p3_word;        row_r <= grp_row;
+      end
+      assign g_tv[gl] = tv_r;  assign g_tw[gl] = tw_r;  assign g_word[gl] = word_r;  assign g_row[gl] = row_r;
+    end
     for (gl = 0; gl < 16; gl++) begin : g_pram
       softmax_rowram #(.DEPTH(ROW_WORDS), .AW(AW)) u_ram (
         .clk,
-        .we(p3_tv[P3_LAT-1] && grp_row == 5'(gl)), .waddr(AW'(p3_tw[P3_LAT-1])), .wdata(p3_word),
+        .we(g_tv[gl/4] && g_row[gl/4] == 5'(gl)), .waddr(g_tw[gl/4]), .wdata(g_word[gl/4]),
         .raddr(out_a), .q(pram_q[gl])
       );
     end
@@ -433,7 +453,7 @@ module attn_softmax
           end else state <= S_REQ;
         end
         S_REQ: if (rd_cmd_ready) state <= S_RD;
-        S_RD: if (rdone_q) begin drain <= 8'd6; state <= S_MAXD; end
+        S_RD: if (rdone_q) begin drain <= 8'd7; state <= S_MAXD; end
         S_MAXD: begin
           if (drain == 0) begin p2_i <= '0; state <= S_P2; end
           else drain <= drain - 1'b1;
@@ -456,7 +476,7 @@ module attn_softmax
         S_P3: begin
           p3_issue <= 1'b1;
           p3_i <= p3_i + 1'b1;
-          if (p3_i == (AW+1)'(nw - 1)) begin drain <= 8'(P3_LAT + 7); state <= S_P3D; end
+          if (p3_i == (AW+1)'(nw - 1)) begin drain <= 8'(P3_LAT + 9); state <= S_P3D; end
         end
         S_P3D: begin
           p3_issue <= 1'b0;
