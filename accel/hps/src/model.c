@@ -144,6 +144,7 @@ struct model {
     int cpu_patch;                      /* --cpu-patch: patch embedding on the CPU even with the engine */
     int pipeline, pl_cap, pl_ok;
     int mlp_fuse;                       /* PS_MLP instead of READ(fc1x), SWIGLU, LN(mlpn), PREP(fc2) */
+    struct pl_sched *pl_sched;          /* engine scheduler of the running pipeline, for pl_engine_tick inside a step */
     size_t pl_slot;                     /* bytes of each chunk's slot in the region's activation and output areas */
     float *pl_n[PL_MAX];                /* LayerNorm output / float input of the next layer */
     int8_t *pl_a8[PL_MAX];              /* quantised input (kept for the next layer that reuses it, and --check) */
@@ -532,6 +533,8 @@ static int pl_prepare(model_t *m)
 /* adds the time since the last lap to a counter of model_stats_t and starts a new lap */
 #define PL_LAP(field) do { const double _n = now_s(); m->st.field += _n - tt; tt = _n; } while (0)
 
+static void pl_tick_inside(model_t *m);
+
 /* one ARM step on one chunk */
 static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
 {
@@ -675,6 +678,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
             }
             uint8_t *hi = m->hw->region + a_off + (size_t)(g0 / 16) * 2 * K * 16;
             fpga_pack_acts16_sub(a16, gn, K, hi, hi + (size_t)K * 16);
+            pl_tick_inside(m);          /* ~2 ms per group: the engine does not wait for the whole step */
         }
         accel_hw_clean(m->hw, a_off, fpga_acts_bytes(nr, K, 2));
         PL_LAP(pl_swiglu);
@@ -702,6 +706,71 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
 }
 
 /* runs the step list on all chunks; 0 on success */
+/* engine side of the pipeline loop */
+typedef struct pl_sched {
+    pjob_t *jobs;
+    int nj;
+    const pstep_t *steps;
+    int ns;
+    int remaining, inflight;    /* chunks not finished; chunk on the engine, or -1 */
+    accel_op_t op;              /* the operation in flight */
+    double t_op, t_end;         /* start of the operation in flight; when it was first seen finished (trace) */
+    int in_j;
+    const char *in_name;
+    int err;                    /* set by a tick that failed inside an ARM step */
+} pl_sched_t;
+
+/* Collects the engine operation that has finished and starts the first chunk waiting for the engine. Called by
+ * the pipeline loop and, through m->pl_sched, from inside long ARM steps between row groups, so the engine gets
+ * its next operation within a millisecond instead of waiting for the whole step. The chunk whose ARM step is in
+ * progress is never started: its program counter still points at that ARM step, not at a PS_RUN. 0 on success. */
+static int pl_engine_tick(model_t *m, pl_sched_t *S)
+{
+    if (S->inflight >= 0 && !accel_hw_busy(m->hw)) {
+        accel_stat_t st;
+        if (accel_hw_wait(m->hw, &S->op, &st, 60.0) != 0)
+            return -1;
+        m->st.cycles += st.cycles;
+        m->st.ops++;
+        if (g_tr)
+            tr_add("eng", S->in_name, S->in_j, S->t_op, S->t_end > 0 ? S->t_end : now_s(), st.cycles);
+        if (++S->jobs[S->inflight].pc == S->ns)
+            S->remaining--;
+        S->inflight = -1;
+    }
+    if (S->inflight < 0) {
+        for (int j = 0; j < S->nj; j++) {
+            if (S->jobs[j].pc >= S->ns || S->steps[S->jobs[j].pc].kind != PS_RUN)
+                continue;
+            const layer_t *L = S->steps[S->jobs[j].pc].L;
+            const int K = L->in, N = L->out, planes = L->in_bits > 8 ? 2 : 1;
+            accel_op_t *op = &S->op;
+            memset(op, 0, sizeof *op);
+            op->M = (uint32_t)S->jobs[j].nr; op->N = (uint32_t)N; op->K = (uint32_t)K;
+            op->in_bits = L->in_bits; op->out_bits = L->out_bits; op->spp = planes == 2 ? 4 : 16;
+            op->a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF + (uint32_t)((size_t)j * m->pl_slot);
+            op->w_phys = ACCEL_REGION_PHYS + m->w_off[L - m->p->layers];
+            op->out_phys = ACCEL_REGION_PHYS + FPGA_O_OFF + (uint32_t)((size_t)j * m->pl_slot);
+            if (accel_hw_start(m->hw, op) != 0)
+                return -1;
+            S->inflight = j;
+            S->t_op = now_s();
+            S->t_end = 0;
+            S->in_j = j;
+            S->in_name = L->name;
+            break;
+        }
+    }
+    return 0;
+}
+
+/* inside an ARM step: give the engine its next operation if it is idle; errors are reported through S->err */
+static void pl_tick_inside(model_t *m)
+{
+    if (m->pl_sched && !m->pl_sched->err && pl_engine_tick(m, m->pl_sched) != 0)
+        m->pl_sched->err = 1;
+}
+
 static int pl_run(model_t *m, const pstep_t *steps, int ns)
 {
     const int T = m->tokens, cap = m->pl_cap;
@@ -712,81 +781,54 @@ static int pl_run(model_t *m, const pstep_t *steps, int ns)
         jobs[j].nr = T - j * cap < cap ? T - j * cap : cap;
         jobs[j].pc = 0;
     }
-    int remaining = nj, inflight = -1;
-    accel_op_t op;
-    double t_op = 0, t_end = 0;
-    int in_j = -1;
-    const char *in_name = "";
+    pl_sched_t S = {.jobs = jobs, .nj = nj, .steps = steps, .ns = ns, .remaining = nj, .inflight = -1,
+                    .in_j = -1, .in_name = ""};
     const double w0 = now_s();
     m->a_ok = 0;                        /* the region's activation area is about to hold chunk data (also if we fail) */
-    while (remaining > 0) {
-        /* 1. collect the operation that has finished */
-        if (inflight >= 0 && !accel_hw_busy(m->hw)) {
-            accel_stat_t st;
-            if (accel_hw_wait(m->hw, &op, &st, 60.0) != 0)
-                return -1;
-            m->st.cycles += st.cycles;
-            m->st.ops++;
-            if (g_tr)
-                tr_add("eng", in_name, in_j, t_op, t_end > 0 ? t_end : now_s(), st.cycles);
-            if (++jobs[inflight].pc == ns)
-                remaining--;
-            inflight = -1;
+    m->pl_sched = &S;
+    while (S.remaining > 0) {
+        /* 1 + 2. collect the finished operation and start the next one */
+        if (pl_engine_tick(m, &S) != 0) {
+            m->pl_sched = NULL;
+            return -1;
         }
-        /* 2. the engine is idle: start the first chunk that is waiting for it */
-        if (inflight < 0) {
-            for (int j = 0; j < nj; j++) {
-                if (jobs[j].pc >= ns || steps[jobs[j].pc].kind != PS_RUN)
-                    continue;
-                const layer_t *L = steps[jobs[j].pc].L;
-                const int K = L->in, N = L->out, planes = L->in_bits > 8 ? 2 : 1;
-                memset(&op, 0, sizeof op);
-                op.M = (uint32_t)jobs[j].nr; op.N = (uint32_t)N; op.K = (uint32_t)K;
-                op.in_bits = L->in_bits; op.out_bits = L->out_bits; op.spp = planes == 2 ? 4 : 16;
-                op.a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF + (uint32_t)((size_t)j * m->pl_slot);
-                op.w_phys = ACCEL_REGION_PHYS + m->w_off[L - m->p->layers];
-                op.out_phys = ACCEL_REGION_PHYS + FPGA_O_OFF + (uint32_t)((size_t)j * m->pl_slot);
-                if (accel_hw_start(m->hw, &op) != 0)
-                    return -1;
-                inflight = j;
-                t_op = now_s();
-                t_end = 0;
-                in_j = j;
-                in_name = L->name;
-                break;
-            }
-        }
-        /* 3. one ARM step of a chunk that is not on the engine */
+        /* 3. one ARM step of a chunk that is not on the engine (long steps call pl_engine_tick between row groups) */
         int did = 0;
         for (int j = 0; j < nj && !did; j++) {
-            if (j == inflight || jobs[j].pc >= ns || steps[jobs[j].pc].kind == PS_RUN)
+            if (j == S.inflight || jobs[j].pc >= ns || steps[jobs[j].pc].kind == PS_RUN)
                 continue;
             pl_arm(m, &steps[jobs[j].pc], &jobs[j], j);
+            if (S.err) {
+                m->pl_sched = NULL;
+                return -1;
+            }
             if (++jobs[j].pc == ns)
-                remaining--;
+                S.remaining--;
             did = 1;
-            if (g_tr && inflight >= 0 && t_end == 0 && !accel_hw_busy(m->hw))
-                t_end = now_s();
+            if (g_tr && S.inflight >= 0 && S.t_end == 0 && !accel_hw_busy(m->hw))
+                S.t_end = now_s();
         }
         /* 4. nothing for the ARM to do: wait for the engine (spin on its status) */
-        if (!did && inflight >= 0) {
+        if (!did && S.inflight >= 0) {
             const double t = now_s();
-            while (accel_hw_busy(m->hw) && now_s() - t_op < 60.0)
+            while (accel_hw_busy(m->hw) && now_s() - S.t_op < 60.0)
                 ;
             m->st.pl_idle += now_s() - t;
             if (g_tr) {
                 const double te = now_s();
-                tr_add("idle", "wait", in_j, t, te, 0);
-                if (t_end == 0 && !accel_hw_busy(m->hw))
-                    t_end = te;
+                tr_add("idle", "wait", S.in_j, t, te, 0);
+                if (S.t_end == 0 && !accel_hw_busy(m->hw))
+                    S.t_end = te;
             }
-            if (now_s() - t_op >= 60.0) {
+            if (now_s() - S.t_op >= 60.0) {
                 fprintf(stderr, "pipeline: the engine did not finish in 60 s\n");
-                accel_hw_wait(m->hw, &op, NULL, 0.1);
+                accel_hw_wait(m->hw, &S.op, NULL, 0.1);
+                m->pl_sched = NULL;
                 return -1;
             }
         }
     }
+    m->pl_sched = NULL;
     m->st.pl_wall += now_s() - w0;
     m->st.t_lin_wall += now_s() - w0;
     m->a_ok = 0;                        /* the region's activation area now holds chunk data */

@@ -22,7 +22,7 @@ static inline int quant_one(float x, float sc, float inv, int qm)
     const float t = x * inv;
     float r = (t + magic) - magic;
     const float f = fabsf(t - truncf(t));
-    if (fabsf(f - 0.5f) < 1e-5f * fabsf(t) + 1e-6f)
+    if (fabsf(f - 0.5f) < 4e-7f * fabsf(t) + 1e-6f) /* same bound as the NEON path (see below) */
         r = rintf(x / sc);
     int v = (int)r;
     return v > qm ? qm : v < -qm ? -qm : v;
@@ -46,7 +46,10 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
      * min(f, 1 - f) with f = |t - trunc(t)|, so |d - 0.5| is the scalar tie test. Any lane that is a
      * tie candidate, or has |t| >= 2^22 (or NaN), is recomputed with the exact scalar code. */
     const float32x4_t vinv = vdupq_n_f32(inv), vmagic = vdupq_n_f32(12582912.0f);
-    const float32x4_t vhalf = vdupq_n_f32(0.5f), vk = vdupq_n_f32(1e-5f), ve = vdupq_n_f32(1e-6f);
+    /* Tie bound. inv = fl(1/sc) and t = fl(x * inv) each add at most 2^-24 of relative error, so
+     * |t - x/sc| <= 1.2e-7 |t| (+ 2^-25 from the float subtraction below). 4e-7 keeps a 3x margin.
+     * The earlier 1e-5 sent most 16-bit lanes (|t| ~ 1e4: bound 0.1) through the scalar division. */
+    const float32x4_t vhalf = vdupq_n_f32(0.5f), vk = vdupq_n_f32(4e-7f), ve = vdupq_n_f32(1e-6f);
     const float32x4_t vbig = vdupq_n_f32(4194304.0f);
     const int32x4_t vqm = vdupq_n_s32(qm), vnqm = vdupq_n_s32(-qm);
     const ptrdiff_t nv = nn & ~(ptrdiff_t)3;
@@ -57,7 +60,7 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
         const float32x4_t r = vsubq_f32(vaddq_f32(t, vmagic), vmagic);
         const float32x4_t at = vabsq_f32(t);
         const float32x4_t d = vabsq_f32(vsubq_f32(t, r));
-        /* tie candidate: |d - 0.5| < 1e-5*|t| + 1e-6 (separate mul and add, no FMA) */
+        /* tie candidate: |d - 0.5| < 4e-7*|t| + 1e-6 (separate mul and add, no FMA) */
         const float32x4_t lim = vaddq_f32(vmulq_f32(vk, at), ve);
         const uint32x4_t tie = vcltq_f32(vabsq_f32(vsubq_f32(d, vhalf)), lim);
         const uint32x4_t ok = vcltq_f32(at, vbig); /* false for NaN as well */
