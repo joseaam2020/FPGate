@@ -174,7 +174,7 @@ void epilogue_int(const int32_t *acc, int M, int N, const int32_t *bias, const i
         }
 }
 
-#ifndef LN_EXACT_DIV
+#ifdef LN_FAST_DIV
 /* a / den, bit-identical to the IEEE division. t = a * rden is a candidate; the residual
  * e = a - t * den is exact in double (24 x 24 bit product, and a ~ t * den so the subtraction
  * is exact). t is the correctly rounded quotient when |e| < half the distance from t to its
@@ -228,7 +228,7 @@ void layer_norm(const float *x, int rows, int d, const float *g, const float *b,
         }
         const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
         const float den = sqrtf(var + epsf);
-#ifdef LN_EXACT_DIV
+#ifndef LN_FAST_DIV
         for (int k = 0; k < d; k++) {
             float t = (xr[k] - mu) / den;
 #else
