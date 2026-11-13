@@ -1,6 +1,6 @@
 // Accelerator core: two register blocks behind one Avalon-MM slave, the GEMM engine and the attention
-// softmax unit, each with its own pair of Avalon-MM masters towards the HPS SDRAM port (Platform
-// Designer arbitrates the four onto it).
+// softmax unit, each with its own pair of internal DMA masters; mem_arbiter merges the four onto one
+// Avalon-MM master (mem_*) towards the HPS SDRAM port.
 //
 //   register file, byte offsets:  0x000..0x0FF  GEMM engine   (csr.sv)
 //                                 0x100..0x1FF  softmax unit  (csr_sm.sv)
@@ -24,35 +24,52 @@ module fpgate_accel_core #(
   input  logic         avs_read,
   output logic [31:0]  avs_readdata,
   output logic         irq,
-  // GEMM engine: read master
-  output logic [31:0]  rd_address,
-  output logic         rd_read,
-  output logic [7:0]   rd_burstcount,
-  input  logic         rd_waitrequest,
-  input  logic [255:0] rd_readdata,
-  input  logic         rd_readdatavalid,
-  // GEMM engine: write master
-  output logic [31:0]  wr_address,
-  output logic         wr_write,
-  output logic [255:0] wr_writedata,
-  output logic [31:0]  wr_byteenable,
-  output logic [7:0]   wr_burstcount,
-  input  logic         wr_waitrequest,
-  // softmax unit: read master
-  output logic [31:0]  rd2_address,
-  output logic         rd2_read,
-  output logic [7:0]   rd2_burstcount,
-  input  logic         rd2_waitrequest,
-  input  logic [255:0] rd2_readdata,
-  input  logic         rd2_readdatavalid,
-  // softmax unit: write master
-  output logic [31:0]  wr2_address,
-  output logic         wr2_write,
-  output logic [255:0] wr2_writedata,
-  output logic [31:0]  wr2_byteenable,
-  output logic [7:0]   wr2_burstcount,
-  input  logic         wr2_waitrequest
+  // single master towards the HPS SDRAM port (the four DMA masters go through mem_arbiter)
+  output logic [31:0]  mem_address,
+  output logic         mem_read,
+  output logic         mem_write,
+  output logic [255:0] mem_writedata,
+  output logic [31:0]  mem_byteenable,
+  output logic [7:0]   mem_burstcount,
+  input  logic         mem_waitrequest,
+  input  logic [255:0] mem_readdata,
+  input  logic         mem_readdatavalid
 );
+  // ---- internal DMA masters and their arbiter --------------------------------------------------------------
+  logic [31:0]  rd_address, wr_address, wr_byteenable, rd2_address, wr2_address, wr2_byteenable;
+  logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest;
+  logic         rd2_read, rd2_waitrequest, rd2_readdatavalid, wr2_write, wr2_waitrequest;
+  logic [7:0]   rd_burstcount, wr_burstcount, rd2_burstcount, wr2_burstcount;
+  logic [255:0] rd_readdata, wr_writedata, rd2_readdata, wr2_writedata, arb_readdata;
+
+  // port 0 engine read, 1 engine write, 2 softmax read, 3 softmax write
+  logic [31:0]  a_address [4];
+  logic         a_read [4], a_write [4], a_wait [4], a_rdv [4];
+  logic [255:0] a_wdata [4];
+  logic [31:0]  a_be [4];
+  logic [7:0]   a_bc [4];
+  always_comb begin
+    a_address[0] = rd_address;   a_read[0] = rd_read;   a_write[0] = 1'b0;      a_wdata[0] = '0;           a_be[0] = '0;              a_bc[0] = rd_burstcount;
+    a_address[1] = wr_address;   a_read[1] = 1'b0;      a_write[1] = wr_write;  a_wdata[1] = wr_writedata;  a_be[1] = wr_byteenable;   a_bc[1] = wr_burstcount;
+    a_address[2] = rd2_address;  a_read[2] = rd2_read;  a_write[2] = 1'b0;      a_wdata[2] = '0;           a_be[2] = '0;              a_bc[2] = rd2_burstcount;
+    a_address[3] = wr2_address;  a_read[3] = 1'b0;      a_write[3] = wr2_write; a_wdata[3] = wr2_writedata; a_be[3] = wr2_byteenable;  a_bc[3] = wr2_burstcount;
+    rd_waitrequest  = a_wait[0];  rd_readdatavalid  = a_rdv[0];
+    wr_waitrequest  = a_wait[1];
+    rd2_waitrequest = a_wait[2];  rd2_readdatavalid = a_rdv[2];
+    wr2_waitrequest = a_wait[3];
+    rd_readdata = arb_readdata;   rd2_readdata = arb_readdata;
+  end
+
+  mem_arbiter u_arb (
+    .clk, .rst_n,
+    .m_address(a_address), .m_read(a_read), .m_write(a_write), .m_writedata(a_wdata),
+    .m_byteenable(a_be), .m_burstcount(a_bc), .m_waitrequest(a_wait),
+    .m_readdata(arb_readdata), .m_readdatavalid(a_rdv),
+    .s_address(mem_address), .s_read(mem_read), .s_write(mem_write), .s_writedata(mem_writedata),
+    .s_byteenable(mem_byteenable), .s_burstcount(mem_burstcount), .s_waitrequest(mem_waitrequest),
+    .s_readdata(mem_readdata), .s_readdatavalid(mem_readdatavalid)
+  );
+
   // ---- address decode ------------------------------------------------------------------------------
   wire sel_sm = avs_address[6];
   logic sel_sm_q;

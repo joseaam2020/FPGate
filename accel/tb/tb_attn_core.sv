@@ -26,31 +26,21 @@ module tb_attn_core;
   logic [31:0]  avs_writedata, avs_readdata;
   logic [3:0]   avs_byteenable;
 
-  logic [31:0]  rd_address, wr_address, wr_byteenable, rd2_address, wr2_address, wr2_byteenable;
-  logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest;
-  logic         rd2_read, rd2_waitrequest, rd2_readdatavalid, wr2_write, wr2_waitrequest;
-  logic [7:0]   rd_burstcount, wr_burstcount, rd2_burstcount, wr2_burstcount;
-  logic [255:0] rd_readdata, wr_writedata, rd2_readdata, wr2_writedata;
+  // single memory port of the core (the four internal DMA masters go through its arbiter)
+  logic [31:0]  mem_address, mem_byteenable;
+  logic         mem_read, mem_write, mem_waitrequest, mem_readdatavalid;
+  logic [7:0]   mem_burstcount;
+  logic [255:0] mem_writedata, mem_readdata;
+
 
   fpgate_accel_core #(.A_BEATS(8192), .W_BEATS(1024), .LANES(4), .SM_LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
   cyc_mon mon();
 
-  avalon_mem_model #(.DEPTH(DEPTH)) m_er (
-    .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),
-    .byteenable('0), .burstcount(rd_burstcount), .waitrequest(rd_waitrequest),
-    .readdata(rd_readdata), .readdatavalid(rd_readdatavalid), .hang_reads(1'b0));
-  avalon_mem_model #(.DEPTH(DEPTH)) m_ew (
-    .clk, .rst_n, .address(wr_address), .read(1'b0), .write(wr_write), .writedata(wr_writedata),
-    .byteenable(wr_byteenable), .burstcount(wr_burstcount), .waitrequest(wr_waitrequest),
-    .readdata(), .readdatavalid(), .hang_reads(1'b0));
-  avalon_mem_model #(.DEPTH(DEPTH)) m_sr (
-    .clk, .rst_n, .address(rd2_address), .read(rd2_read), .write(1'b0), .writedata('0),
-    .byteenable('0), .burstcount(rd2_burstcount), .waitrequest(rd2_waitrequest),
-    .readdata(rd2_readdata), .readdatavalid(rd2_readdatavalid), .hang_reads(1'b0));
-  avalon_mem_model #(.DEPTH(DEPTH)) m_sw (
-    .clk, .rst_n, .address(wr2_address), .read(1'b0), .write(wr2_write), .writedata(wr2_writedata),
-    .byteenable(wr2_byteenable), .burstcount(wr2_burstcount), .waitrequest(wr2_waitrequest),
-    .readdata(), .readdatavalid(), .hang_reads(1'b0));
+  avalon_mem_model #(.DEPTH(DEPTH)) mem (
+    .clk, .rst_n, .address(mem_address), .read(mem_read), .write(mem_write), .writedata(mem_writedata),
+    .byteenable(mem_byteenable), .burstcount(mem_burstcount), .waitrequest(mem_waitrequest),
+    .readdata(mem_readdata), .readdatavalid(mem_readdatavalid), .hang_reads(1'b0)
+  );
 
   int errors = 0, checks = 0;
 
@@ -99,10 +89,10 @@ module tb_attn_core;
     $display("%s: %0d query rows, 1025 keys", dir, R);
 
     wr(32'h004, 32'h2); wr(32'h104, 32'h2);                 // RESET_SOFT of both units
-    for (int i = 0; i < DEPTH; i++) begin m_er.mem[i] = '0; m_ew.mem[i] = '0; m_sr.mem[i] = '0; m_sw.mem[i] = '0; end
-    for (int i = 0; i < 64; i++)      m_er.mem[A_Q / 32 + i] = img_a[i];
-    for (int i = 0; i < 65 * 40; i++) m_er.mem[W_K / 32 + i] = img_wk[i];
-    for (int i = 0; i < 4 * 521; i++) m_er.mem[W_V / 32 + i] = img_wv[i];
+    for (int i = 0; i < DEPTH; i++) mem.mem[i] = '0;
+    for (int i = 0; i < 64; i++)      mem.mem[A_Q / 32 + i] = img_a[i];
+    for (int i = 0; i < 65 * 40; i++) mem.mem[W_K / 32 + i] = img_wk[i];
+    for (int i = 0; i < 4 * 521; i++) mem.mem[W_V / 32 + i] = img_wv[i];
 
     // 1. scores
     wr(32'h020, A_Q); wr(32'h024, W_K); wr(32'h028, S_OUT); wr(32'h04C, 1040 * 4);
@@ -113,7 +103,7 @@ module tb_attn_core;
     wait_done("scores", 32'h008, 400000);
     mon.report($sformatf("S_%0drows", R));
     rd(32'h038, v); $display("    scores: %0d cycles", v);
-    for (int i = 0; i < R * 130; i++) m_sr.mem[S_OUT / 32 + i] = m_ew.mem[S_OUT / 32 + i];
+    for (int i = 0; i < R * 130; i++) ;
 
     // 2. softmax
     wr(32'h110, R); wr(32'h114, 1025); wr(32'h118, KP);
@@ -124,7 +114,6 @@ module tb_attn_core;
     wait_done("softmax", 32'h108, 400000);
     mon.report($sformatf("softmax_%0drows", R));
     rd(32'h130, v); $display("    softmax: %0d cycles", v);
-    for (int i = 0; i < ((R + 15) / 16) * KP; i++) m_er.mem[P_OUT / 32 + i] = m_sw.mem[P_OUT / 32 + i];
 
     // 3. context
     wr(32'h020, P_OUT); wr(32'h024, W_V); wr(32'h028, CTX); wr(32'h04C, 64);
@@ -142,7 +131,7 @@ module tb_attn_core;
         int off;
         logic [7:0] got;
         off = CTX + r * 64 + d;
-        got = m_ew.mem[off / 32][8 * (off % 32) +: 8];
+        got = mem.mem[off / 32][8 * (off % 32) +: 8];
         if (got !== ctx_ref[r * 64 + d]) begin
           if (bad < 6) $display("FAIL %s ctx[%0d][%0d]: got %0d expected %0d", dir, r, d, $signed(got), $signed(ctx_ref[r * 64 + d]));
           bad++;

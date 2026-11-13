@@ -1,7 +1,7 @@
 # Platform Designer component for the FPGate accelerator core: CSR + GEMM engine + attention softmax unit.
-# Register slave (128 words: engine at 0x000..0x0FF, softmax unit at 0x100..0x1FF) plus four Avalon-MM
-# masters (read and write for the engine, read2 and write2 for the softmax unit; 256-bit, byte addresses)
-# towards the HPS SDRAM port. RTL lives in accel/rtl; paths are relative to this file.
+# Register slave (128 words: engine at 0x000..0x0FF, softmax unit at 0x100..0x1FF) plus ONE Avalon-MM master
+# (mem: 256-bit, byte addresses, bursts up to 16 beats) towards the HPS SDRAM port; the four internal DMA
+# masters are merged by mem_arbiter. RTL lives in accel/rtl; paths are relative to this file.
 package require -exact qsys 16.1
 
 set_module_property NAME fpgate_accel_core
@@ -17,7 +17,7 @@ set_fileset_property QUARTUS_SYNTH TOP_LEVEL fpgate_accel_core
 set_fileset_property QUARTUS_SYNTH ENABLE_RELATIVE_INCLUDE_PATHS false
 # the package first: later files import it
 foreach f {fpgate_pkg pe gemm_array requant_lane epilogue_row linear_tile tile_buffers
-           operand_feeder tile_sequencer dma_rd dma_wr gemm_engine csr csr_sm
+           operand_feeder tile_sequencer dma_rd dma_wr mem_arbiter gemm_engine csr csr_sm
            softmax_idx_lane softmax_p3_lane softmax_exp_rom softmax_recip_rom softmax_rowram attn_softmax fpgate_accel_core} {
   if {$f eq "fpgate_accel_core"} {
     add_fileset_file $f.sv SYSTEM_VERILOG PATH ../../../rtl/$f.sv TOP_LEVEL_FILE
@@ -59,69 +59,25 @@ add_interface_port avs avs_byteenable  byteenable  Input  4
 add_interface_port avs avs_read        read        Input  1
 add_interface_port avs avs_readdata    readdata    Output 32
 
-# read master: bursts up to 16 beats, one burst outstanding
-add_interface rd avalon start
-set_interface_property rd addressUnits SYMBOLS
-set_interface_property rd associatedClock clock
-set_interface_property rd associatedReset reset
-set_interface_property rd bitsPerSymbol 8
-set_interface_property rd burstOnBurstBoundariesOnly false
-set_interface_property rd linewrapBursts false
-set_interface_property rd maximumPendingReadTransactions 1
-set_interface_property rd readLatency 0
-add_interface_port rd rd_address        address        Output 32
-add_interface_port rd rd_read           read           Output 1
-add_interface_port rd rd_burstcount     burstcount     Output 8
-add_interface_port rd rd_waitrequest    waitrequest    Input  1
-add_interface_port rd rd_readdata       readdata       Input  256
-add_interface_port rd rd_readdatavalid  readdatavalid  Input  1
-
-# write master: single-beat writes with byte enables
-add_interface wr avalon start
-set_interface_property wr addressUnits SYMBOLS
-set_interface_property wr associatedClock clock
-set_interface_property wr associatedReset reset
-set_interface_property wr bitsPerSymbol 8
-set_interface_property wr burstOnBurstBoundariesOnly false
-set_interface_property wr linewrapBursts false
-add_interface_port wr wr_address        address        Output 32
-add_interface_port wr wr_write          write          Output 1
-add_interface_port wr wr_writedata      writedata      Output 256
-add_interface_port wr wr_byteenable     byteenable     Output 32
-add_interface_port wr wr_burstcount     burstcount     Output 8
-add_interface_port wr wr_waitrequest    waitrequest    Input  1
-
-# softmax unit read master (score rows): bursts up to 16 beats, one burst outstanding
-add_interface rd2 avalon start
-set_interface_property rd2 addressUnits SYMBOLS
-set_interface_property rd2 associatedClock clock
-set_interface_property rd2 associatedReset reset
-set_interface_property rd2 bitsPerSymbol 8
-set_interface_property rd2 burstOnBurstBoundariesOnly false
-set_interface_property rd2 linewrapBursts false
-set_interface_property rd2 maximumPendingReadTransactions 1
-set_interface_property rd2 readLatency 0
-add_interface_port rd2 rd2_address        address        Output 32
-add_interface_port rd2 rd2_read           read           Output 1
-add_interface_port rd2 rd2_burstcount     burstcount     Output 8
-add_interface_port rd2 rd2_waitrequest    waitrequest    Input  1
-add_interface_port rd2 rd2_readdata       readdata       Input  256
-add_interface_port rd2 rd2_readdatavalid  readdatavalid  Input  1
-
-# softmax unit write master (probability words): single-beat writes
-add_interface wr2 avalon start
-set_interface_property wr2 addressUnits SYMBOLS
-set_interface_property wr2 associatedClock clock
-set_interface_property wr2 associatedReset reset
-set_interface_property wr2 bitsPerSymbol 8
-set_interface_property wr2 burstOnBurstBoundariesOnly false
-set_interface_property wr2 linewrapBursts false
-add_interface_port wr2 wr2_address        address        Output 32
-add_interface_port wr2 wr2_write          write          Output 1
-add_interface_port wr2 wr2_writedata      writedata      Output 256
-add_interface_port wr2 wr2_byteenable     byteenable     Output 32
-add_interface_port wr2 wr2_burstcount     burstcount     Output 8
-add_interface_port wr2 wr2_waitrequest    waitrequest    Input  1
+# memory master: read bursts up to 16 beats (up to 16 outstanding), single-beat writes with byte enables
+add_interface mem avalon start
+set_interface_property mem addressUnits SYMBOLS
+set_interface_property mem associatedClock clock
+set_interface_property mem associatedReset reset
+set_interface_property mem bitsPerSymbol 8
+set_interface_property mem burstOnBurstBoundariesOnly false
+set_interface_property mem linewrapBursts false
+set_interface_property mem maximumPendingReadTransactions 16
+set_interface_property mem readLatency 0
+add_interface_port mem mem_address        address        Output 32
+add_interface_port mem mem_read           read           Output 1
+add_interface_port mem mem_write          write          Output 1
+add_interface_port mem mem_writedata      writedata      Output 256
+add_interface_port mem mem_byteenable     byteenable     Output 32
+add_interface_port mem mem_burstcount     burstcount     Output 8
+add_interface_port mem mem_waitrequest    waitrequest    Input  1
+add_interface_port mem mem_readdata       readdata       Input  256
+add_interface_port mem mem_readdatavalid  readdatavalid  Input  1
 
 # interrupt (software polls STATUS for now)
 add_interface irq interrupt end

@@ -20,30 +20,19 @@ module tb_raw32;
   logic [31:0]  avs_writedata, avs_readdata;
   logic [3:0]   avs_byteenable;
 
-  logic [31:0]  rd_address, wr_address, wr_byteenable;
-  logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest;
-  logic [7:0]   rd_burstcount, wr_burstcount;
-  logic [255:0] rd_readdata, wr_writedata;
+  // single memory port of the core (the four internal DMA masters go through its arbiter)
+  logic [31:0]  mem_address, mem_byteenable;
+  logic         mem_read, mem_write, mem_waitrequest, mem_readdatavalid;
+  logic [7:0]   mem_burstcount;
+  logic [255:0] mem_writedata, mem_readdata;
 
-  // softmax unit's masters: idle here, tied off
-  logic [31:0]  rd2_address, wr2_address, wr2_byteenable;
-  logic         rd2_read, wr2_write;
-  logic [7:0]   rd2_burstcount, wr2_burstcount;
-  logic [255:0] wr2_writedata;
-  logic         rd2_waitrequest = 0, rd2_readdatavalid = 0, wr2_waitrequest = 0;
-  logic [255:0] rd2_readdata = '0;
 
   fpgate_accel_core #(.A_BEATS(4096), .W_BEATS(1024), .LANES(4), .ADDR_LO(32'h0), .ADDR_HI(32'hFFFF_FFE0)) dut (.*);
 
-  avalon_mem_model #(.DEPTH(DEPTH)) mem_r (
-    .clk, .rst_n, .address(rd_address), .read(rd_read), .write(1'b0), .writedata('0),
-    .byteenable('0), .burstcount(rd_burstcount), .waitrequest(rd_waitrequest),
-    .readdata(rd_readdata), .readdatavalid(rd_readdatavalid), .hang_reads(1'b0)
-  );
-  avalon_mem_model #(.DEPTH(DEPTH)) mem_w (
-    .clk, .rst_n, .address(wr_address), .read(1'b0), .write(wr_write), .writedata(wr_writedata),
-    .byteenable(wr_byteenable), .burstcount(wr_burstcount), .waitrequest(wr_waitrequest),
-    .readdata(), .readdatavalid(), .hang_reads(1'b0)
+  avalon_mem_model #(.DEPTH(DEPTH)) mem (
+    .clk, .rst_n, .address(mem_address), .read(mem_read), .write(mem_write), .writedata(mem_writedata),
+    .byteenable(mem_byteenable), .burstcount(mem_burstcount), .waitrequest(mem_waitrequest),
+    .readdata(mem_readdata), .readdatavalid(mem_readdatavalid), .hang_reads(1'b0)
   );
 
   int errors = 0, checks = 0;
@@ -77,10 +66,10 @@ module tb_raw32;
     stride = N * 4;
     K = 64;
     wr(32'h04, 32'h2);                                  // RESET_SOFT
-    for (int i = 0; i < DEPTH; i++) begin mem_r.mem[i] = '0; mem_w.mem[i] = '0; end
-    for (int i = 0; i < 64; i++) begin mem_r.mem[A_BASE / 32 + i] = img_a[i]; end
-    for (int i = 0; i < 3 * 40; i++) begin mem_r.mem[W_BASE / 32 + i] = img_w[i]; end
-    for (int i = 0; i < (M * stride) / 32 + 2; i++) begin mem_r.mem[O_BASE / 32 + i] = {32{8'hCC}}; mem_w.mem[O_BASE / 32 + i] = {32{8'hCC}}; end
+    for (int i = 0; i < DEPTH; i++) begin mem.mem[i] = '0; end
+    for (int i = 0; i < 64; i++) begin mem.mem[A_BASE / 32 + i] = img_a[i]; end
+    for (int i = 0; i < 3 * 40; i++) begin mem.mem[W_BASE / 32 + i] = img_w[i]; end
+    for (int i = 0; i < (M * stride) / 32 + 2; i++) begin mem.mem[O_BASE / 32 + i] = {32{8'hCC}}; end
 
     wr(32'h20, A_BASE); wr(32'h24, W_BASE); wr(32'h28, O_BASE); wr(32'h4C, stride);
     wr(32'h14, M); wr(32'h18, N); wr(32'h1C, K);
@@ -89,6 +78,7 @@ module tb_raw32;
     to = 0;
     do begin rd(32'h08, s); to++; end while (s[0] && to < 200000);
     expect_eq({name, " STATUS done"}, s, 32'h2);
+    repeat (16) @(posedge clk);                         // DONE can precede the last writes leaving the arbiter's output stages
 
     bad = 0;
     for (int r = 0; r < M; r++)
@@ -96,7 +86,7 @@ module tb_raw32;
         int off;
         logic [31:0] got, exp;
         off = O_BASE + r * stride + n * 4;
-        got = mem_w.mem[off / 32][8 * (off % 32) +: 32];
+        got = mem.mem[off / 32][8 * (off % 32) +: 32];
         exp = s_ref[r * 48 + n];
         if (got !== exp) begin if (bad < 5) $display("FAIL %s [%0d][%0d]: got %0d expected %0d", name, r, n, $signed(got), $signed(exp)); bad++; end
       end
@@ -107,7 +97,7 @@ module tb_raw32;
     rd(32'h38, v);
     $display("    CYCLES = %0d", v);
     // rows past the last valid row, and bytes after the matrix, are untouched
-    expect_eq({name, " byte after the matrix"}, mem_w.mem[(O_BASE + M * stride) / 32][7:0], 32'hCC);
+    expect_eq({name, " byte after the matrix"}, mem.mem[(O_BASE + M * stride) / 32][7:0], 32'hCC);
   endtask
 
   task automatic run_dir(input string dir);

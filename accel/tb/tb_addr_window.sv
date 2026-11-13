@@ -14,18 +14,17 @@ module tb_addr_window;
   logic         avs_write, avs_read, irq;
   logic [31:0]  avs_writedata, avs_readdata;
   logic [3:0]   avs_byteenable;
-  logic [31:0]  rd_address, wr_address, wr_byteenable, rd2_address, wr2_address, wr2_byteenable;
-  logic         rd_read, wr_write, rd2_read, wr2_write;
-  logic [7:0]   rd_burstcount, wr_burstcount, rd2_burstcount, wr2_burstcount;
-  logic [255:0] wr_writedata, wr2_writedata;
-  logic         rd_waitrequest = 0, rd_readdatavalid = 0, wr_waitrequest = 0;
-  logic         rd2_waitrequest = 0, rd2_readdatavalid = 0, wr2_waitrequest = 0;
-  logic [255:0] rd_readdata = '0, rd2_readdata = '0;
+  logic [31:0]  mem_address, mem_byteenable;
+  logic         mem_read, mem_write;
+  logic [7:0]   mem_burstcount;
+  logic [255:0] mem_writedata;
+  logic         mem_waitrequest = 0, mem_readdatavalid = 0;
+  logic [255:0] mem_readdata = '0;
 
   fpgate_accel_core #(.A_BEATS(4096), .W_BEATS(1024), .LANES(4), .SM_LANES(4)) dut (.*);
 
   int bus_ops = 0;
-  always @(posedge clk) if (rd_read || wr_write || rd2_read || wr2_write) bus_ops++;
+  always @(posedge clk) if (mem_read || mem_write) bus_ops++;
 
   int errors = 0, checks = 0;
   task automatic expect_eq(input string what, input logic [31:0] got, input logic [31:0] exp);

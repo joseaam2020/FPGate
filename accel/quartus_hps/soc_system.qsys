@@ -91,7 +91,17 @@
  <parameter name="timeStamp" value="0" />
  <parameter name="useTestBenchNamingPattern" value="false" />
  <instanceScript></instanceScript>
+ <interface
+   name="accel_mem"
+   internal="fpgate_accel.mem"
+   type="avalon"
+   dir="start" />
  <interface name="clk" internal="clk_0.clk_in" type="clock" dir="end" />
+ <interface
+   name="f2h_sdram0"
+   internal="hps_0.f2h_sdram0_data"
+   type="avalon"
+   dir="end" />
  <interface
    name="hps_0_f2h_cold_reset_req"
    internal="hps_0.f2h_cold_reset_req"
@@ -876,42 +886,6 @@
    version="18.1"
    start="hps_0.h2f_lw_axi_master"
    end="fpgate_accel.avs">
-  <parameter name="arbitrationPriority" value="1" />
-  <parameter name="baseAddress" value="0x0000" />
-  <parameter name="defaultConnection" value="false" />
- </connection>
- <connection
-   kind="avalon"
-   version="18.1"
-   start="fpgate_accel.rd"
-   end="hps_0.f2h_sdram0_data">
-  <parameter name="arbitrationPriority" value="1" />
-  <parameter name="baseAddress" value="0x0000" />
-  <parameter name="defaultConnection" value="false" />
- </connection>
- <connection
-   kind="avalon"
-   version="18.1"
-   start="fpgate_accel.rd2"
-   end="hps_0.f2h_sdram0_data">
-  <parameter name="arbitrationPriority" value="1" />
-  <parameter name="baseAddress" value="0x0000" />
-  <parameter name="defaultConnection" value="false" />
- </connection>
- <connection
-   kind="avalon"
-   version="18.1"
-   start="fpgate_accel.wr"
-   end="hps_0.f2h_sdram0_data">
-  <parameter name="arbitrationPriority" value="1" />
-  <parameter name="baseAddress" value="0x0000" />
-  <parameter name="defaultConnection" value="false" />
- </connection>
- <connection
-   kind="avalon"
-   version="18.1"
-   start="fpgate_accel.wr2"
-   end="hps_0.f2h_sdram0_data">
   <parameter name="arbitrationPriority" value="1" />
   <parameter name="baseAddress" value="0x0000" />
   <parameter name="defaultConnection" value="false" />

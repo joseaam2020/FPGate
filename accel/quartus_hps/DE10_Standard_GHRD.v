@@ -215,6 +215,12 @@ module DE10_Standard_GHRD(
   wire  hps_fpga_reset_n;
   wire [27:0] stm_hw_events;
   wire        fpga_clk_50;
+// accelerator memory master -> HPS SDRAM port (f2h_sdram0), joined by plain wires: no interconnect in between.
+// The HPS slave takes 32-byte word addresses, the master drives byte addresses.
+  wire [31:0]  accel_mem_address, accel_mem_byteenable;
+  wire         accel_mem_read, accel_mem_write, accel_mem_waitrequest, accel_mem_readdatavalid;
+  wire [7:0]   accel_mem_burstcount;
+  wire [255:0] accel_mem_writedata, accel_mem_readdata;
 // connection of internal logics: LEDs and stm events are fixed (PIOs removed)
   assign LEDR[9:1] = 9'b0;
   assign stm_hw_events    = 28'd0;
@@ -317,6 +323,24 @@ soc_system u0 (
     	  .hps_0_hps_io_hps_io_gpio_inst_GPIO61  ( HPS_GSENSOR_INT),  //                               .hps_io_gpio_inst_GPIO61
 
 			
+		  .accel_mem_address                     (accel_mem_address),
+		  .accel_mem_read                        (accel_mem_read),
+		  .accel_mem_write                       (accel_mem_write),
+		  .accel_mem_writedata                   (accel_mem_writedata),
+		  .accel_mem_byteenable                  (accel_mem_byteenable),
+		  .accel_mem_burstcount                  (accel_mem_burstcount),
+		  .accel_mem_waitrequest                 (accel_mem_waitrequest),
+		  .accel_mem_readdata                    (accel_mem_readdata),
+		  .accel_mem_readdatavalid               (accel_mem_readdatavalid),
+		  .f2h_sdram0_address                    (accel_mem_address[31:5]),
+		  .f2h_sdram0_burstcount                 (accel_mem_burstcount),
+		  .f2h_sdram0_waitrequest                (accel_mem_waitrequest),
+		  .f2h_sdram0_readdata                   (accel_mem_readdata),
+		  .f2h_sdram0_readdatavalid              (accel_mem_readdatavalid),
+		  .f2h_sdram0_read                       (accel_mem_read),
+		  .f2h_sdram0_writedata                  (accel_mem_writedata),
+		  .f2h_sdram0_byteenable                 (accel_mem_byteenable),
+		  .f2h_sdram0_write                      (accel_mem_write),
 		  .hps_0_h2f_reset_reset_n               ( hps_fpga_reset_n ),                //                hps_0_h2f_reset.reset_n
 		  .hps_0_f2h_cold_reset_req_reset_n      (1'b1),                  //       hps_0_f2h_cold_reset_req.reset_n
 		  .hps_0_f2h_debug_reset_req_reset_n     (1'b1),                  //      hps_0_f2h_debug_reset_req.reset_n

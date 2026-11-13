@@ -2,7 +2,8 @@
 #  - a 50 -> 150 MHz PLL for the accelerator and the HPS SDRAM port clock,
 #  - fpgate_accel_core: registers at the start of the lightweight bridge (0xFF200000),
 #    the other GHRD peripherals (LEDs, switches, keys, JTAG UART, debug masters) are removed,
-#  - the core's four masters (engine read/write, softmax unit read2/write2) on hps_0.f2h_sdram0_data.
+#  - the core's single memory master (it arbitrates the engine and softmax DMAs itself) is exported next to
+#    hps_0.f2h_sdram0_data; the top level wires the two together.
 # Idempotent: it always starts from ghrd_original.qsys and writes soc_system.qsys.
 # Run from accel/quartus_hps:
 #   qsys-script --script=build_system.tcl --search-path="ip/**/*,$"
@@ -35,18 +36,17 @@ add_connection clk_0.clk_reset fpgate_accel.reset
 add_connection hps_0.h2f_lw_axi_master fpgate_accel.avs
 set_connection_parameter_value hps_0.h2f_lw_axi_master/fpgate_accel.avs baseAddress 0x00000000
 
-# HPS SDRAM port: clocked by the PLL, driven by the two masters (plus the GHRD debug master)
+# HPS SDRAM port: clocked by the PLL
 foreach c [get_connections hps_0.f2h_sdram0_clock] { remove_connection $c }
 add_connection pll_0.outclk0 hps_0.f2h_sdram0_clock
 set_instance_parameter_value hps_0 F2H_SDRAM0_CLOCK_FREQ [expr {int($ACCEL_MHZ * 1000000)}]
 
-add_connection fpgate_accel.rd hps_0.f2h_sdram0_data
-set_connection_parameter_value fpgate_accel.rd/hps_0.f2h_sdram0_data baseAddress 0x00000000
-add_connection fpgate_accel.wr hps_0.f2h_sdram0_data
-set_connection_parameter_value fpgate_accel.wr/hps_0.f2h_sdram0_data baseAddress 0x00000000
-add_connection fpgate_accel.rd2 hps_0.f2h_sdram0_data
-set_connection_parameter_value fpgate_accel.rd2/hps_0.f2h_sdram0_data baseAddress 0x00000000
-add_connection fpgate_accel.wr2 hps_0.f2h_sdram0_data
-set_connection_parameter_value fpgate_accel.wr2/hps_0.f2h_sdram0_data baseAddress 0x00000000
+# The accelerator has ONE master (mem_arbiter inside the core) and the HPS port ONE slave: both sides are
+# exported and joined in the top level with plain wires, so Platform Designer generates no interconnect
+# (no mm_interconnect_3, no 2048-deep FIFO) in between.
+add_interface accel_mem avalon master
+set_interface_property accel_mem EXPORT_OF fpgate_accel.mem
+add_interface f2h_sdram0 avalon slave
+set_interface_property f2h_sdram0 EXPORT_OF hps_0.f2h_sdram0_data
 
 save_system soc_system.qsys
