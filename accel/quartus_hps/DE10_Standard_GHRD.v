@@ -213,17 +213,11 @@ module DE10_Standard_GHRD(
 //  REG/WIRE declarations
 //=======================================================
   wire  hps_fpga_reset_n;
-  wire [3:0] fpga_debounced_buttons;
-  wire [8:0]  fpga_led_internal;
-  wire [2:0]  hps_reset_req;
-  wire        hps_cold_reset;
-  wire        hps_warm_reset;
-  wire        hps_debug_reset;
   wire [27:0] stm_hw_events;
   wire        fpga_clk_50;
-// connection of internal logics
-  assign LEDR[9:1] = fpga_led_internal;
-  assign stm_hw_events    = {{4{1'b0}}, SW, fpga_led_internal, fpga_debounced_buttons};
+// connection of internal logics: LEDs and stm events are fixed (PIOs removed)
+  assign LEDR[9:1] = 9'b0;
+  assign stm_hw_events    = 28'd0;
   assign fpga_clk_50=CLOCK_50;
 //=======================================================
 //  Structural coding
@@ -323,66 +317,15 @@ soc_system u0 (
     	  .hps_0_hps_io_hps_io_gpio_inst_GPIO61  ( HPS_GSENSOR_INT),  //                               .hps_io_gpio_inst_GPIO61
 
 			
-		  .led_pio_external_connection_export    ( fpga_led_internal ),               //                               led_pio_external_connection.export                     
-        .dipsw_pio_external_connection_export  ( SW ),                 //                               dipsw_pio_external_connection.export
-        .button_pio_external_connection_export ( fpga_debounced_buttons ),              //                               button_pio_external_connection.export 
 		  .hps_0_h2f_reset_reset_n               ( hps_fpga_reset_n ),                //                hps_0_h2f_reset.reset_n
-		  .hps_0_f2h_cold_reset_req_reset_n      (~hps_cold_reset ),      //       hps_0_f2h_cold_reset_req.reset_n
-		  .hps_0_f2h_debug_reset_req_reset_n     (~hps_debug_reset ),     //      hps_0_f2h_debug_reset_req.reset_n
+		  .hps_0_f2h_cold_reset_req_reset_n      (1'b1),                  //       hps_0_f2h_cold_reset_req.reset_n
+		  .hps_0_f2h_debug_reset_req_reset_n     (1'b1),                  //      hps_0_f2h_debug_reset_req.reset_n
 		  .hps_0_f2h_stm_hw_events_stm_hwevents  (stm_hw_events ),  //        hps_0_f2h_stm_hw_events.stm_hwevents
-		  .hps_0_f2h_warm_reset_req_reset_n      (~hps_warm_reset ),      //       hps_0_f2h_warm_reset_req.reset_n
+		  .hps_0_f2h_warm_reset_req_reset_n      (1'b1),                  //       hps_0_f2h_warm_reset_req.reset_n
   
     );
 
 	 
-	 // Debounce logic to clean out glitches within 1ms
-debounce debounce_inst (
-  .clk                                  (fpga_clk_50),
-  .reset_n                              (hps_fpga_reset_n),  
-  .data_in                              (KEY),
-  .data_out                             (fpga_debounced_buttons)
-);
-  defparam debounce_inst.WIDTH = 4;
-  defparam debounce_inst.POLARITY = "LOW";
-  defparam debounce_inst.TIMEOUT = 50000;               // at 50Mhz this is a debounce time of 1ms
-  defparam debounce_inst.TIMEOUT_WIDTH = 16;            // ceil(log2(TIMEOUT))
-  
-// Source/Probe megawizard instance
-hps_reset hps_reset_inst (
-  .source_clk (fpga_clk_50),
-  .source     (hps_reset_req)
-);
-
-altera_edge_detector pulse_cold_reset (
-  .clk       (fpga_clk_50),
-  .rst_n     (hps_fpga_reset_n),
-  .signal_in (hps_reset_req[0]),
-  .pulse_out (hps_cold_reset)
-);
-  defparam pulse_cold_reset.PULSE_EXT = 6;
-  defparam pulse_cold_reset.EDGE_TYPE = 1;
-  defparam pulse_cold_reset.IGNORE_RST_WHILE_BUSY = 1;
-
-altera_edge_detector pulse_warm_reset (
-  .clk       (fpga_clk_50),
-  .rst_n     (hps_fpga_reset_n),
-  .signal_in (hps_reset_req[1]),
-  .pulse_out (hps_warm_reset)
-);
-  defparam pulse_warm_reset.PULSE_EXT = 2;
-  defparam pulse_warm_reset.EDGE_TYPE = 1;
-  defparam pulse_warm_reset.IGNORE_RST_WHILE_BUSY = 1;
-  
-altera_edge_detector pulse_debug_reset (
-  .clk       (fpga_clk_50),
-  .rst_n     (hps_fpga_reset_n),
-  .signal_in (hps_reset_req[2]),
-  .pulse_out (hps_debug_reset)
-);
-  defparam pulse_debug_reset.PULSE_EXT = 32;
-  defparam pulse_debug_reset.EDGE_TYPE = 1;
-  defparam pulse_debug_reset.IGNORE_RST_WHILE_BUSY = 1;
-  
 reg [25:0] counter; 
 reg  led_level;
 always @(posedge fpga_clk_50 or negedge hps_fpga_reset_n)
