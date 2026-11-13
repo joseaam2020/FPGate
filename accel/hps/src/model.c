@@ -143,6 +143,7 @@ struct model {
     /* row-chunk pipeline (see model_set_pipeline); buffers are per chunk, sized for chunk_rows rows */
     int cpu_patch;                      /* --cpu-patch: patch embedding on the CPU even with the engine */
     int pipeline, pl_cap, pl_ok;
+    int mlp_fuse;                       /* PS_MLP instead of READ(fc1x), SWIGLU, LN(mlpn), PREP(fc2) */
     size_t pl_slot;                     /* bytes of each chunk's slot in the region's activation and output areas */
     float *pl_n[PL_MAX];                /* LayerNorm output / float input of the next layer */
     int8_t *pl_a8[PL_MAX];              /* quantised input (kept for the next layer that reuses it, and --check) */
@@ -150,6 +151,7 @@ struct model {
     uint8_t *pl_stage[PL_MAX];          /* packing staging, also the temporary of the 8-bit output read */
     int32_t *pl_acc[PL_MAX];            /* --check only */
     int16_t *pl_chk[PL_MAX];
+    float *pl_row[PL_MAX];              /* MLP: per-row SwiGLU and LayerNorm outputs of one 16-row group */
     model_stats_t st;
 };
 
@@ -447,12 +449,12 @@ static void dbg16(model_dbg_fn f, void *c, int b, const char *what, const int16_
  * slot in the region's activation and output areas, so no two steps conflict. Every step does exactly what
  * the sequential code does to the same rows, so the result is identical. */
 
-typedef enum { PS_LN, PS_CTXF, PS_PREP, PS_RUN, PS_READ, PS_RES, PS_SWIGLU, PS_ROPE } pstep_kind;
+typedef enum { PS_LN, PS_CTXF, PS_PREP, PS_RUN, PS_READ, PS_RES, PS_SWIGLU, PS_ROPE, PS_MLP } pstep_kind;
 
 typedef struct {
     pstep_kind kind;
     const layer_t *L;           /* PREP, RUN, READ */
-    const block_t *B;           /* CTXF, SWIGLU, ROPE */
+    const block_t *B;           /* CTXF, SWIGLU, ROPE, MLP */
     int from_hh;                /* LN: the input is hh, else the residual stream x */
     const float *g, *b;         /* LN */
     int dim;                    /* LN */
@@ -468,7 +470,8 @@ static void pl_free(model_t *m)
 {
     for (int j = 0; j < PL_MAX; j++) {
         free(m->pl_n[j]); free(m->pl_a8[j]); free(m->pl_a16[j]); free(m->pl_stage[j]); free(m->pl_acc[j]);
-        free(m->pl_chk[j]);
+        free(m->pl_chk[j]); free(m->pl_row[j]);
+        m->pl_row[j] = NULL;
         m->pl_n[j] = NULL; m->pl_a8[j] = NULL; m->pl_a16[j] = NULL; m->pl_stage[j] = NULL; m->pl_acc[j] = NULL;
         m->pl_chk[j] = NULL;
     }
@@ -512,11 +515,12 @@ static int pl_prepare(model_t *m)
         m->pl_a8[j] = malloc((size_t)cap * maxk);
         m->pl_a16[j] = malloc((size_t)cap * maxk * 2);
         m->pl_stage[j] = malloc(slot);
+        m->pl_row[j] = malloc((size_t)32 * maxk * sizeof(float));
         if (m->check) {
             m->pl_acc[j] = malloc((size_t)cap * maxk * 4);
             m->pl_chk[j] = malloc((size_t)cap * maxk * 2);
         }
-        if (!m->pl_n[j] || !m->pl_a8[j] || !m->pl_a16[j] || !m->pl_stage[j] || (m->check && (!m->pl_acc[j] || !m->pl_chk[j]))) {
+        if (!m->pl_n[j] || !m->pl_a8[j] || !m->pl_a16[j] || !m->pl_stage[j] || !m->pl_row[j] || (m->check && (!m->pl_acc[j] || !m->pl_chk[j]))) {
             pl_free(m);
             return 0;
         }
@@ -632,6 +636,50 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         PL_LAP(pl_swiglu);
         break;
     }
+    case PS_MLP: {
+        /* READ(fc1x), SWIGLU, LN(mlpn) and PREP(fc2) fused by 16-row groups: g from g16, u straight from the
+         * region's output slot, the same per-element SwiGLU, layer_norm_row (the code of layer_norm) and
+         * quantize_f32, then the group's subtile is packed straight into the slot's activation area.
+         * h16 and hh are not written: inside the pipeline only PS_LN (from_hh) reads hh, and it is replaced. */
+        const block_t *B = s->B;
+        const layer_t *L = B->fc2;
+        const int N = B->neurons, K = L->in;
+        const int64_t sw_rnd = (int64_t)1 << (B->sw_sh - 1);
+        const int qm_in = qmax_of(p->silu_in_bits);
+        const float epsf = (float)p->ln_eps;
+        const size_t o_off = FPGA_O_OFF + (size_t)slot * m->pl_slot;
+        const size_t a_off = FPGA_A_OFF + (size_t)slot * m->pl_slot;
+        const int ub = B->fc1x->out_bits > 8 ? 2 : 1;      /* fc1x's output in the region: INT16 or INT8 */
+        const uint8_t *ureg = m->hw->region + o_off;
+        int16_t *a16 = m->pl_a16[slot];
+        for (int g0 = 0; g0 < nr; g0 += 16) {
+            const int gn = nr - g0 < 16 ? nr - g0 : 16;
+            accel_hw_inval(m->hw, o_off + (size_t)g0 * N * ub, (size_t)gn * N * ub);
+#pragma omp parallel for schedule(static)
+            for (int i = 0; i < gn; i++) {
+                const int16_t *gr = m->g16 + (size_t)(r0 + g0 + i) * N;
+                const uint8_t *ur = ureg + (size_t)(g0 + i) * N * ub;
+                float *hr = m->pl_row[slot] + (size_t)i * N;
+                float *nrow = m->pl_row[slot] + (size_t)(16 + i) * N;
+                const int16_t *u16 = (const int16_t *)ur;
+                const int8_t *u8 = (const int8_t *)ur;
+                for (int k = 0; k < N; k++) {
+                    const int u = ub == 2 ? u16[k] : u8[k];
+                    int64_t y = (int64_t)B->silu[gr[k] + qm_in] * u;
+                    y = (y * B->sw_m0 + sw_rnd) >> B->sw_sh;
+                    const int16_t h = (int16_t)(y > 32767 ? 32767 : y < -32767 ? -32767 : y);
+                    hr[k] = (float)((double)h * B->s_h);
+                }
+                layer_norm_row(hr, N, B->mlpn_g, B->mlpn_b, epsf, nrow);
+                quantize_f32(nrow, (size_t)K, L->s_x, 16, a16 + (size_t)i * K);
+            }
+            uint8_t *hi = m->hw->region + a_off + (size_t)(g0 / 16) * 2 * K * 16;
+            fpga_pack_acts16_sub(a16, gn, K, hi, hi + (size_t)K * 16);
+        }
+        accel_hw_clean(m->hw, a_off, fpga_acts_bytes(nr, K, 2));
+        PL_LAP(pl_swiglu);
+        break;
+    }
     case PS_ROPE: {
         const block_t *B = s->B;
         const int A = B->q->out, H = B->heads, hd = A / H;
@@ -648,7 +696,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         break;
     }
     if (g_tr) {
-        static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope"};
+        static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope", "mlp"};
         tr_add("arm", nm[s->kind], slot, t_step0, now_s(), 0);
     }
 }
@@ -795,11 +843,25 @@ static int pl_after_attention(model_t *m, int bi, int nb)
     pstep_t *ln = pl_add(s, &n, PS_LN);
     ln->dim = m->dim; ln->g = B->n2_g; ln->b = B->n2_b;
     pl_linear(s, &n, B->fc1g, NULL, m->g16, 0);
-    pl_linear(s, &n, B->fc1x, B->fc1g, m->u16, 0);
-    pl_add(s, &n, PS_SWIGLU)->B = B;
-    ln = pl_add(s, &n, PS_LN);
-    ln->from_hh = 1; ln->dim = B->neurons; ln->g = B->mlpn_g; ln->b = B->mlpn_b;
-    pl_linear(s, &n, B->fc2, NULL, m->y16, 0);
+    /* fused MLP tail (not with --check: the per-layer verification needs the separate steps). fc1g and fc1x
+     * share the output slot, so READ(fc1g) -> g16 stays: a second output slot per chunk does not fit the 8 MiB
+     * output area at the usual chunk sizes (6 chunks x 1.18 MB x 2 > 8 MiB). */
+    const int fuse = !m->check && m->mlp_fuse && B->fc2->in_bits > 8 && B->fc2->in == B->neurons &&
+                     B->fc1x->out == B->neurons && B->fc1x->s_x == B->fc1g->s_x &&
+                     B->fc1x->in_bits == B->fc1g->in_bits && B->fc1x->in == B->fc1g->in;
+    if (fuse) {
+        pl_add(s, &n, PS_RUN)->L = B->fc1x;   /* reuses fc1g's quantised input */
+        pl_add(s, &n, PS_MLP)->B = B;
+        pl_add(s, &n, PS_RUN)->L = B->fc2;
+        pstep_t *rd = pl_add(s, &n, PS_READ);
+        rd->L = B->fc2; rd->dst = m->y16;
+    } else {
+        pl_linear(s, &n, B->fc1x, B->fc1g, m->u16, 0);
+        pl_add(s, &n, PS_SWIGLU)->B = B;
+        ln = pl_add(s, &n, PS_LN);
+        ln->from_hh = 1; ln->dim = B->neurons; ln->g = B->mlpn_g; ln->b = B->mlpn_b;
+        pl_linear(s, &n, B->fc2, NULL, m->y16, 0);
+    }
     r = pl_add(s, &n, PS_RES);
     r->src = m->y16; r->scale = B->s_fc2;
     if (bi + 1 < nb)
@@ -1431,6 +1493,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     m->a_ok = 0;
     m->chunk_rows = 192;
     m->pipeline = 1;
+    m->mlp_fuse = 1;
     if (fpga_attn) {
         if (!hw->has_softmax) {
             fprintf(stderr, "model: --fpga-attn needs a bitstream with the softmax unit (registers at 0x100)\n");
@@ -1455,6 +1518,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
 void model_limit_blocks(model_t *m, int n) { m->max_blocks = n; }
 void model_set_chunk(model_t *m, int rows) { m->chunk_rows = rows <= 0 ? 0 : (rows + 15) & ~15; }
 void model_set_pipeline(model_t *m, int on) { m->pipeline = on; }
+void model_set_mlp_fuse(model_t *m, int on) { m->mlp_fuse = on; }
 const model_stats_t *model_stats(const model_t *m) { return &m->st; }
 void model_stats_reset(model_t *m) { memset(&m->st, 0, sizeof m->st); }
 

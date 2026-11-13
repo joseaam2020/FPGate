@@ -35,6 +35,8 @@ void fpga_pack_v(const int8_t *v, int tokens, int stride, int hd, int kp, int32_
 size_t fpga_acts_bytes(int rows, int K, int planes);
 void fpga_pack_acts8(const int8_t *a, int rows, int K, uint8_t *dst);
 void fpga_pack_acts16(const int16_t *a, int rows, int K, uint8_t *dst);
+/* one subtile of fpga_pack_acts16: rows (<= 16) rows of a, zeros below; hi and lo planes of K * 16 bytes each */
+void fpga_pack_acts16_sub(const int16_t *a, int rows, int K, uint8_t *hi, uint8_t *lo);
 
 /* the engine needs N a multiple of 16 and K even */
 static inline int fpga_supports(const layer_t *L) { return L->is_int && (L->out % 16) == 0 && (L->in % 2) == 0; }

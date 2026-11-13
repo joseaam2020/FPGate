@@ -29,6 +29,8 @@ void epilogue_int(const int32_t *acc, int M, int N, const int32_t *bias, const i
 
 /* LayerNorm exactly as float_ref.layer_norm: (x - mu) / sqrt(var + eps) * g + b in float32 */
 void layer_norm(const float *x, int rows, int d, const float *g, const float *b, double eps, float *y);
+/* one row of layer_norm (same code and order); epsf = (float)eps */
+void layer_norm_row(const float *xr, int d, const float *g, const float *b, float epsf, float *yr);
 
 /* RoPE on INT16 pre-RoPE values (INT8 result); x is [tokens][stride] and each head has hd columns.
  * Token 0 (the class token) is not rotated. cos/sin are [tokens-1][hd] in Q1.(frac). */

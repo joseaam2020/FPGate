@@ -141,6 +141,23 @@ void fpga_pack_acts16(const int16_t *a, int rows, int K, uint8_t *dst)
     }
 }
 
+void fpga_pack_acts16_sub(const int16_t *a, int rows, int K, uint8_t *hi, uint8_t *lo)
+{
+    int k0 = 0;
+#ifdef __ARM_NEON
+    if (rows == 16) {
+        pack16_sub_neon(a, K, hi, lo);
+        k0 = K & ~15;
+    }
+#endif
+    for (int k = k0; k < K; k++)
+        for (int i = 0; i < 16; i++) {
+            const uint16_t v = i < rows ? (uint16_t)a[(size_t)i * K + k] : 0;
+            hi[(size_t)k * 16 + i] = (uint8_t)(v >> 8);
+            lo[(size_t)k * 16 + i] = (uint8_t)(v & 0xFF);
+        }
+}
+
 void fpga_pack_acts8_strided(const int8_t *a, int rows, int K, int stride, uint8_t *dst)
 {
     const int subs = (rows + 15) / 16;

@@ -198,48 +198,50 @@ static inline float ln_div(float a, float den, float rden)
 }
 #endif
 
+void layer_norm_row(const float *xr, int d, const float *g, const float *b, float epsf, float *yr)
+{
+    /* four independent double accumulators break the add-latency chain (the VFP double add
+     * has a latency of several cycles on the Cortex-A9). Sums of float values in double are
+     * exact for the ranges seen here, so the result does not depend on the order. */
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int j = 0;
+    for (; j + 4 <= d; j += 4) {
+        s0 += xr[j]; s1 += xr[j + 1]; s2 += xr[j + 2]; s3 += xr[j + 3];
+    }
+    for (; j < d; j++)
+        s0 += xr[j];
+    const float mu = (float)(((s0 + s1) + (s2 + s3)) / d);
+    double v0 = 0.0, v1 = 0.0, v2 = 0.0, v3 = 0.0;
+    j = 0;
+    for (; j + 4 <= d; j += 4) {
+        const float e0 = xr[j] - mu, e1 = xr[j + 1] - mu, e2 = xr[j + 2] - mu, e3 = xr[j + 3] - mu;
+        v0 += (double)(e0 * e0); v1 += (double)(e1 * e1); v2 += (double)(e2 * e2); v3 += (double)(e3 * e3);
+    }
+    for (; j < d; j++) {
+        const float e = xr[j] - mu;
+        v0 += (double)(e * e);
+    }
+    const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
+    const float den = sqrtf(var + epsf);
+#ifndef LN_FAST_DIV
+    for (int k = 0; k < d; k++) {
+        float t = (xr[k] - mu) / den;
+#else
+    const float rden = 1.0f / den;
+    for (int k = 0; k < d; k++) {
+        float t = ln_div(xr[k] - mu, den, rden);
+#endif
+        t = t * g[k];
+        yr[k] = t + b[k];
+    }
+}
+
 void layer_norm(const float *x, int rows, int d, const float *g, const float *b, double eps, float *y)
 {
     const float epsf = (float)eps;
 #pragma omp parallel for schedule(static)
-    for (int r = 0; r < rows; r++) {
-        const float *xr = x + (size_t)r * d;
-        float *yr = y + (size_t)r * d;
-        /* four independent double accumulators break the add-latency chain (the VFP double add
-         * has a latency of several cycles on the Cortex-A9). Sums of float values in double are
-         * exact for the ranges seen here, so the result does not depend on the order. */
-        double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
-        int j = 0;
-        for (; j + 4 <= d; j += 4) {
-            s0 += xr[j]; s1 += xr[j + 1]; s2 += xr[j + 2]; s3 += xr[j + 3];
-        }
-        for (; j < d; j++)
-            s0 += xr[j];
-        const float mu = (float)(((s0 + s1) + (s2 + s3)) / d);
-        double v0 = 0.0, v1 = 0.0, v2 = 0.0, v3 = 0.0;
-        j = 0;
-        for (; j + 4 <= d; j += 4) {
-            const float e0 = xr[j] - mu, e1 = xr[j + 1] - mu, e2 = xr[j + 2] - mu, e3 = xr[j + 3] - mu;
-            v0 += (double)(e0 * e0); v1 += (double)(e1 * e1); v2 += (double)(e2 * e2); v3 += (double)(e3 * e3);
-        }
-        for (; j < d; j++) {
-            const float e = xr[j] - mu;
-            v0 += (double)(e * e);
-        }
-        const float var = (float)(((v0 + v1) + (v2 + v3)) / d);
-        const float den = sqrtf(var + epsf);
-#ifndef LN_FAST_DIV
-        for (int k = 0; k < d; k++) {
-            float t = (xr[k] - mu) / den;
-#else
-        const float rden = 1.0f / den;
-        for (int k = 0; k < d; k++) {
-            float t = ln_div(xr[k] - mu, den, rden);
-#endif
-            t = t * g[k];
-            yr[k] = t + b[k];
-        }
-    }
+    for (int r = 0; r < rows; r++)
+        layer_norm_row(x + (size_t)r * d, d, g, b, epsf, y + (size_t)r * d);
 }
 
 void rope_int(const int16_t *x, int tokens, int stride, int heads, int hd, const int16_t *cos_tab,
