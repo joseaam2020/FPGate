@@ -36,6 +36,8 @@ size_t fpga_acts_bytes(int rows, int K, int planes);
 void fpga_pack_acts8(const int8_t *a, int rows, int K, uint8_t *dst);
 void fpga_pack_acts16(const int16_t *a, int rows, int K, uint8_t *dst);
 /* one subtile of fpga_pack_acts16: rows (<= 16) rows of a, zeros below; hi and lo planes of K * 16 bytes each */
+/* one subtile of fpga_pack_acts8: rows (<= 16) rows of a, zeros below; K * 16 bytes */
+void fpga_pack_acts8_sub(const int8_t *a, int rows, int K, uint8_t *d);
 void fpga_pack_acts16_sub(const int16_t *a, int rows, int K, uint8_t *hi, uint8_t *lo);
 
 /* the engine needs N a multiple of 16 and K even */

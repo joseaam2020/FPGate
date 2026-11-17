@@ -29,8 +29,8 @@ for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--ch
         echo "PASS $name: logits identical to the sequential run"
     fi
 done
-# without --check the pipeline fuses the MLP tail (PS_MLP); --check keeps the separate steps, so test it here
-for mode in "fused:" "fused160:--chunk 160" "nofuse:--no-mlp-fuse"; do
+# without --check the pipeline fuses the MLP tail (PS_MLP) and residual+LN+packing (PS_RLP); --check keeps the separate steps, so test it here
+for mode in "fused:" "fused160:--chunk 160" "nofuse:--no-mlp-fuse" "norlp:--no-rlp-fuse" "nofuse_norlp:--no-mlp-fuse --no-rlp-fuse" "rlp48:--chunk 48"; do
     name=${mode%%:*}; opts=${mode#*:}
     CHK= run "$name" $opts
     if ! cmp -s "$tmp/base.logits" "$tmp/$name.logits"; then

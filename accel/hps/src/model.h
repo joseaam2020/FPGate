@@ -51,6 +51,7 @@ void model_set_chunk(model_t *m, int rows);
 void model_set_pipeline(model_t *m, int on);
 /* inside the pipeline, fuse the MLP tail (SwiGLU, LayerNorm, fc2 packing) by 16-row groups; on by default */
 void model_set_mlp_fuse(model_t *m, int on);
+void model_set_rlp_fuse(model_t *m, int on);
 /* How the FPGA attention overlaps the heads (set before the first forward). ATT_OVL_OFF (--no-att-overlap): the
  * sequential attention_fpga. ATT_OVL_AUTO (default): full overlap (softmax, engine and packing at the same time)
  * only when the engine VERSION is the h5b one (ACCEL_HW_VERSION_H5B), else pack-only with a warning.

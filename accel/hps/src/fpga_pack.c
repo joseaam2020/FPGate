@@ -141,6 +141,20 @@ void fpga_pack_acts16(const int16_t *a, int rows, int K, uint8_t *dst)
     }
 }
 
+void fpga_pack_acts8_sub(const int8_t *a, int rows, int K, uint8_t *d)
+{
+    int k0 = 0;
+#ifdef __ARM_NEON
+    if (rows == 16) {
+        pack8_sub_neon(a, K, K, d);
+        k0 = K & ~15;
+    }
+#endif
+    for (int k = k0; k < K; k++)
+        for (int i = 0; i < 16; i++)
+            d[(size_t)k * 16 + i] = i < rows ? (uint8_t)a[(size_t)i * K + k] : 0;
+}
+
 void fpga_pack_acts16_sub(const int16_t *a, int rows, int K, uint8_t *hi, uint8_t *lo)
 {
     int k0 = 0;

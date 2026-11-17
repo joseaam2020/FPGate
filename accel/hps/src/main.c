@@ -33,6 +33,7 @@ static struct {
     int sim;                    /* software engine instead of the FPGA (tests on a PC) */
     int chunk;                  /* rows per engine operation, -1 = model default, 0 = no overlap */
     int pipeline;               /* row-chunk pipeline between attentions */
+    int no_rlp_fuse;            /* --no-rlp-fuse: separate residual, LayerNorm and packing steps */
     int no_mlp_fuse;            /* --no-mlp-fuse: separate MLP tail steps in the pipeline */
     int cpu_patch;              /* patch embedding on the CPU instead of the engine */
     int att_overlap;            /* ATT_OVL_*: how the FPGA attention overlaps its heads */
@@ -59,6 +60,7 @@ static int setup_backend(model_t *model)
         model_set_chunk(model, g_opt.chunk);
     model_set_pipeline(model, g_opt.pipeline);
     model_set_mlp_fuse(model, !g_opt.no_mlp_fuse);
+    model_set_rlp_fuse(model, !g_opt.no_rlp_fuse);
     model_set_cpu_patch(model, g_opt.cpu_patch);
     model_set_att_overlap(model, g_opt.att_overlap);
     return 0;
@@ -600,6 +602,8 @@ int main(int argc, char **argv)
             g_opt.chunk = 0;
         else if (!strcmp(argv[i], "--no-pipeline"))
             g_opt.pipeline = 0;
+        else if (!strcmp(argv[i], "--no-rlp-fuse"))
+            g_opt.no_rlp_fuse = 1;
         else if (!strcmp(argv[i], "--no-mlp-fuse"))
             g_opt.no_mlp_fuse = 1;
         else if (!strcmp(argv[i], "--no-att-overlap"))

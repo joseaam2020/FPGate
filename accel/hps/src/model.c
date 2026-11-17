@@ -143,6 +143,7 @@ struct model {
     /* row-chunk pipeline (see model_set_pipeline); buffers are per chunk, sized for chunk_rows rows */
     int cpu_patch;                      /* --cpu-patch: patch embedding on the CPU even with the engine */
     int pipeline, pl_cap, pl_ok;
+    int rlp_fuse;                       /* PS_RLP instead of READ, RES, LN, PREP after proj and fc2 */
     int mlp_fuse;                       /* PS_MLP instead of READ(fc1x), SWIGLU, LN(mlpn), PREP(fc2) */
     struct pl_sched *pl_sched;          /* engine scheduler of the running pipeline, for pl_engine_tick inside a step */
     size_t pl_slot;                     /* bytes of each chunk's slot in the region's activation and output areas */
@@ -450,11 +451,12 @@ static void dbg16(model_dbg_fn f, void *c, int b, const char *what, const int16_
  * slot in the region's activation and output areas, so no two steps conflict. Every step does exactly what
  * the sequential code does to the same rows, so the result is identical. */
 
-typedef enum { PS_LN, PS_CTXF, PS_PREP, PS_RUN, PS_READ, PS_RES, PS_SWIGLU, PS_ROPE, PS_MLP } pstep_kind;
+typedef enum { PS_LN, PS_CTXF, PS_PREP, PS_RUN, PS_READ, PS_RES, PS_SWIGLU, PS_ROPE, PS_MLP, PS_RLP } pstep_kind;
 
 typedef struct {
     pstep_kind kind;
-    const layer_t *L;           /* PREP, RUN, READ */
+    const layer_t *L;           /* PREP, RUN, READ; RLP: the layer whose output is added to x */
+    const layer_t *L2;          /* RLP: the layer whose INT8 input is prepared from the LayerNorm of x */
     const block_t *B;           /* CTXF, SWIGLU, ROPE, MLP */
     int from_hh;                /* LN: the input is hh, else the residual stream x */
     const float *g, *b;         /* LN */
@@ -684,6 +686,41 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         PL_LAP(pl_swiglu);
         break;
     }
+    case PS_RLP: {
+        /* READ, RES, LN and PREP (8 bits) fused by 16-row groups: the layer's output is read straight from the
+         * region's output slot, x += y * scale row by row, layer_norm_row of the new x, quantise to the next layer's
+         * INT8 input and pack the group's subtile straight into the slot's activation area. */
+        const layer_t *L = s->L, *L2 = s->L2;
+        const int K = L2->in, ob = L->out_bits > 8 ? 2 : 1;
+        const double sc = s->scale;
+        const float epsf = (float)p->ln_eps;
+        const size_t o_off = FPGA_O_OFF + (size_t)slot * m->pl_slot;
+        const size_t a_off = FPGA_A_OFF + (size_t)slot * m->pl_slot;
+        int8_t *a8 = m->pl_a8[slot];
+        for (int g0 = 0; g0 < nr; g0 += 16) {
+            const int gn = nr - g0 < 16 ? nr - g0 : 16;
+            accel_hw_inval(m->hw, o_off + (size_t)g0 * D * ob, (size_t)gn * D * ob);
+#pragma omp parallel for schedule(static)
+            for (int i = 0; i < gn; i++) {
+                float *x = m->x + (size_t)(r0 + g0 + i) * D;
+                const uint8_t *yr = m->hw->region + o_off + (size_t)(g0 + i) * D * ob;
+                float *nrow = m->pl_row[slot] + (size_t)i * D;
+                if (ob == 2)
+                    for (int k = 0; k < D; k++)
+                        x[k] += (float)((double)((const int16_t *)yr)[k] * sc);
+                else
+                    for (int k = 0; k < D; k++)
+                        x[k] += (float)((double)((const int8_t *)yr)[k] * sc);
+                layer_norm_row(x, D, s->g, s->b, epsf, nrow);
+                quantize_f32(nrow, (size_t)K, L2->s_x, 8, a8 + (size_t)i * K);
+            }
+            fpga_pack_acts8_sub(a8, gn, K, m->hw->region + a_off + (size_t)(g0 / 16) * K * 16);
+            pl_tick_inside(m);          /* ~1 ms per group: the engine does not wait for the whole step */
+        }
+        accel_hw_clean(m->hw, a_off, fpga_acts_bytes(nr, K, 1));
+        PL_LAP(pl_ln);
+        break;
+    }
     case PS_ROPE: {
         const block_t *B = s->B;
         const int A = B->q->out, H = B->heads, hd = A / H;
@@ -700,7 +737,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         break;
     }
     if (g_tr) {
-        static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope", "mlp"};
+        static const char *const nm[] = {"ln", "ctxf", "prep", "run", "read", "res", "swiglu", "rope", "mlp", "rlp"};
         tr_add("arm", nm[s->kind], slot, t_step0, now_s(), 0);
     }
 }
@@ -857,11 +894,18 @@ static void pl_linear(pstep_t *s, int *n, const layer_t *L, const layer_t *prev,
 }
 
 /* LayerNorm 1 of block B, q, k, v and RoPE: what a block starts with */
-static void pl_block_head(model_t *m, pstep_t *s, int *n, const block_t *B)
+static void pl_block_head(model_t *m, pstep_t *s, int *n, const block_t *B, int fused)
 {
-    pstep_t *ln = pl_add(s, n, PS_LN);
-    ln->dim = m->dim; ln->g = B->n1_g; ln->b = B->n1_b;
-    pl_linear(s, n, B->q, NULL, m->q16, 0);
+    if (fused) {
+        /* a PS_RLP before this already did LN 1 and the packing of q's input */
+        pl_add(s, n, PS_RUN)->L = B->q;
+        pstep_t *r = pl_add(s, n, PS_READ);
+        r->L = B->q; r->dst = m->q16;
+    } else {
+        pstep_t *ln = pl_add(s, n, PS_LN);
+        ln->dim = m->dim; ln->g = B->n1_g; ln->b = B->n1_b;
+        pl_linear(s, n, B->q, NULL, m->q16, 0);
+    }
     pl_linear(s, n, B->k, B->q, m->k16, 0);
     pl_linear(s, n, B->v, B->k, m->v16, 0);
     pl_add(s, n, PS_ROPE)->B = B;
@@ -877,14 +921,32 @@ static int pl_after_attention(model_t *m, int bi, int nb)
     int n = 0;
     const int ctx_direct = B->proj->in_bits == 8 && B->proj->in == A &&
                            fabs(B->s_ctx - B->proj->s_x) <= 1e-9 * fabs(B->proj->s_x);
+    /* PS_RLP (not with --check: the per-layer verification needs the separate steps) fuses READ, RES, LN and the
+     * INT8 PREP of the next layer; the next layer must take the LayerNorm of x as an INT8 input */
+    const int rlp = !m->check && m->rlp_fuse;
+    const int rlp1 = rlp && B->fc1g->in_bits == 8 && B->fc1g->in == m->dim;
+    const int rlp2 = rlp && bi + 1 < nb && p->blocks[bi + 1].q->in_bits == 8 && p->blocks[bi + 1].q->in == m->dim;
     if (!ctx_direct)
         pl_add(s, &n, PS_CTXF)->B = B;
-    pl_linear(s, &n, B->proj, NULL, m->y16, ctx_direct);
-    pstep_t *r = pl_add(s, &n, PS_RES);
-    r->src = m->y16; r->scale = B->s_proj;
-    pstep_t *ln = pl_add(s, &n, PS_LN);
-    ln->dim = m->dim; ln->g = B->n2_g; ln->b = B->n2_b;
-    pl_linear(s, &n, B->fc1g, NULL, m->g16, 0);
+    pstep_t *ln;
+    if (rlp1) {
+        pstep_t *pp = pl_add(s, &n, PS_PREP);
+        pp->L = B->proj; pp->direct = ctx_direct;
+        pl_add(s, &n, PS_RUN)->L = B->proj;
+        pstep_t *f = pl_add(s, &n, PS_RLP);
+        f->L = B->proj; f->L2 = B->fc1g; f->scale = B->s_proj;
+        f->dim = m->dim; f->g = B->n2_g; f->b = B->n2_b;
+        pl_add(s, &n, PS_RUN)->L = B->fc1g;
+        pstep_t *rd = pl_add(s, &n, PS_READ);
+        rd->L = B->fc1g; rd->dst = m->g16;
+    } else {
+        pl_linear(s, &n, B->proj, NULL, m->y16, ctx_direct);
+        pstep_t *r = pl_add(s, &n, PS_RES);
+        r->src = m->y16; r->scale = B->s_proj;
+        ln = pl_add(s, &n, PS_LN);
+        ln->dim = m->dim; ln->g = B->n2_g; ln->b = B->n2_b;
+        pl_linear(s, &n, B->fc1g, NULL, m->g16, 0);
+    }
     /* fused MLP tail (not with --check: the per-layer verification needs the separate steps). fc1g and fc1x
      * share the output slot, so READ(fc1g) -> g16 stays: a second output slot per chunk does not fit the 8 MiB
      * output area at the usual chunk sizes (6 chunks x 1.18 MB x 2 > 8 MiB). */
@@ -895,19 +957,29 @@ static int pl_after_attention(model_t *m, int bi, int nb)
         pl_add(s, &n, PS_RUN)->L = B->fc1x;   /* reuses fc1g's quantised input */
         pl_add(s, &n, PS_MLP)->B = B;
         pl_add(s, &n, PS_RUN)->L = B->fc2;
-        pstep_t *rd = pl_add(s, &n, PS_READ);
-        rd->L = B->fc2; rd->dst = m->y16;
     } else {
         pl_linear(s, &n, B->fc1x, B->fc1g, m->u16, 0);
         pl_add(s, &n, PS_SWIGLU)->B = B;
         ln = pl_add(s, &n, PS_LN);
         ln->from_hh = 1; ln->dim = B->neurons; ln->g = B->mlpn_g; ln->b = B->mlpn_b;
-        pl_linear(s, &n, B->fc2, NULL, m->y16, 0);
+        pstep_t *pp = pl_add(s, &n, PS_PREP);
+        pp->L = B->fc2;
+        pl_add(s, &n, PS_RUN)->L = B->fc2;
     }
-    r = pl_add(s, &n, PS_RES);
+    if (rlp2) {
+        const block_t *N = &p->blocks[bi + 1];
+        pstep_t *f = pl_add(s, &n, PS_RLP);
+        f->L = B->fc2; f->L2 = N->q; f->scale = B->s_fc2;
+        f->dim = m->dim; f->g = N->n1_g; f->b = N->n1_b;
+        pl_block_head(m, s, &n, N, 1);
+        return pl_run(m, s, n);
+    }
+    pstep_t *rd = pl_add(s, &n, PS_READ);
+    rd->L = B->fc2; rd->dst = m->y16;
+    pstep_t *r = pl_add(s, &n, PS_RES);
     r->src = m->y16; r->scale = B->s_fc2;
     if (bi + 1 < nb)
-        pl_block_head(m, s, &n, &p->blocks[bi + 1]);
+        pl_block_head(m, s, &n, &p->blocks[bi + 1], 0);
     return pl_run(m, s, n);
 }
 
@@ -1019,7 +1091,7 @@ int model_forward(model_t *m, const float *img, float logits[4], model_dbg_fn db
     if (pipe) {
         pstep_t s[16];
         int ns = 0;
-        pl_block_head(m, s, &ns, &p->blocks[0]);
+        pl_block_head(m, s, &ns, &p->blocks[0], 0);
         if (pl_run(m, s, ns))
             return -1;
     }
@@ -1536,6 +1608,7 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     m->chunk_rows = 192;
     m->pipeline = 1;
     m->mlp_fuse = 1;
+    m->rlp_fuse = 1;
     if (fpga_attn) {
         if (!hw->has_softmax) {
             fprintf(stderr, "model: --fpga-attn needs a bitstream with the softmax unit (registers at 0x100)\n");
@@ -1561,6 +1634,7 @@ void model_limit_blocks(model_t *m, int n) { m->max_blocks = n; }
 void model_set_chunk(model_t *m, int rows) { m->chunk_rows = rows <= 0 ? 0 : (rows + 15) & ~15; }
 void model_set_pipeline(model_t *m, int on) { m->pipeline = on; }
 void model_set_mlp_fuse(model_t *m, int on) { m->mlp_fuse = on; }
+void model_set_rlp_fuse(model_t *m, int on) { m->rlp_fuse = on; }
 const model_stats_t *model_stats(const model_t *m) { return &m->st; }
 void model_stats_reset(model_t *m) { memset(&m->st, 0, sizeof m->st); }
 
