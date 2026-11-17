@@ -67,6 +67,11 @@ module gemm_engine
 
   // ---- sequencer --------------------------------------------------------------
   logic        rd_cmd_valid, rd_cmd_ready, rd_to_a, rd_done, rd_err;
+  // registered command slice between the sequencer and dma_rd (one entry; ready = empty)
+  logic        rdq_full, rdq_to_a;
+  logic [31:0] rdq_addr;
+  logic [15:0] rdq_beats;
+  logic        dma_cmd_ready;
   logic [31:0] rd_cmd_addr;
   logic [15:0] rd_cmd_beats;
   logic        w_load_sel, w_comp_sel;
@@ -111,16 +116,29 @@ module gemm_engine
 
   dma_rd #(.BURST(BURST), .TIMEOUT(DMA_TIMEOUT), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_dma_rd (
     .clk, .rst_n, .flush(dma_flush),
-    .cmd_valid(rd_cmd_valid), .cmd_ready(rd_cmd_ready),
-    .cmd_addr(rd_cmd_addr), .cmd_beats(rd_cmd_beats),
+    .cmd_valid(rdq_full), .cmd_ready(dma_cmd_ready),
+    .cmd_addr(rdq_addr), .cmd_beats(rdq_beats),
     .busy(dma_rd_busy), .done(rd_done_dma), .err(rd_err), .err_win(rd_win_err),
     .beat_valid, .beat_data, .beat_idx,
     .m_address(rd_address), .m_read(rd_read), .m_burstcount(rd_burstcount),
     .m_waitrequest(rd_waitrequest), .m_readdata(rd_readdata), .m_readdatavalid(rd_readdatavalid)
   );
 
+  // The sequencer's command is registered here so its decode does not reach dma_rd's state register.
+  // The sequencer never has two commands outstanding, so one entry costs only latency.
+  assign rd_cmd_ready = !rdq_full;
   always_ff @(posedge clk) begin
-    if (rd_cmd_valid && rd_cmd_ready) tgt_a <= rd_to_a;
+    if (!rst_n || dma_flush) rdq_full <= 1'b0;
+    else if (rdq_full) begin
+      if (dma_cmd_ready) rdq_full <= 1'b0;
+    end else if (rd_cmd_valid) begin
+      rdq_full  <= 1'b1;
+      rdq_addr  <= rd_cmd_addr;
+      rdq_beats <= rd_cmd_beats;
+      rdq_to_a  <= rd_to_a;
+    end
+    // the target buffer follows the command dma_rd is working on, not the one queued
+    if (rdq_full && dma_cmd_ready) tgt_a <= rdq_to_a;
   end
 
   wire [15:0] w_widx = beat_idx - 16'd8;     // weight beats follow the 8 constant beats

@@ -10,6 +10,7 @@
 //  - reads: up to DEPTH bursts outstanding. A FIFO holds {port, burstcount} of every accepted read in issue
 //    order and routes each readdatavalid beat to the owner of the oldest burst. Masters never stall readdata
 //    (it is broadcast to all four).
+//  - each port has a one-entry input register (waitrequest low = command captured; it depends on registers only).
 //  - every output towards the HPS port comes from a register. Two stages (output register + skid register)
 //    so that a master's waitrequest depends only on registered state (not on the HPS waitrequest) and a
 //    command still goes out every cycle when the HPS does not stall.
@@ -52,6 +53,11 @@ module mem_arbiter #(
     logic [7:0]   bc;
   } cmd_t;
 
+  // per-port input register: a master's command is captured here, so the master's registered outputs
+  // (e.g. dma_wr's pending) do not feed the grant logic and the data mux in the same cycle
+  cmd_t q_cmd [4];
+  logic [3:0] q_v;
+
   cmd_t p_cmd, s_cmd;                       // output register, skid register
   logic p_valid, s_valid;
 
@@ -79,7 +85,7 @@ module mem_arbiter #(
   logic [3:0] req;
   always_comb
     for (int i = 0; i < 4; i++)
-      req[i] = m_write[i] || (m_read[i] && rd_room);
+      req[i] = q_v[i] && (q_cmd[i].wr || rd_room);
 
   logic       gnt_valid;
   logic [1:0] gnt;
@@ -103,16 +109,28 @@ module mem_arbiter #(
 
   always_comb
     for (int i = 0; i < 4; i++)
-      m_waitrequest[i] = !(take && gnt == 2'(i)) || !rst_n;
+      m_waitrequest[i] = (q_v[i] && !(take && gnt == 2'(i))) || !rst_n;
 
   cmd_t in_cmd;
-  always_comb begin
-    in_cmd.address = m_address[gnt];
-    in_cmd.wr      = m_write[gnt];
-    in_cmd.rd      = !m_write[gnt] && m_read[gnt];
-    in_cmd.data    = m_writedata[gnt];
-    in_cmd.be      = m_byteenable[gnt];
-    in_cmd.bc      = m_burstcount[gnt];
+  assign in_cmd = q_cmd[gnt];
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) q_v <= '0;
+    else begin
+      for (int i = 0; i < 4; i++) begin
+        if (!m_waitrequest[i] && (m_read[i] || m_write[i])) begin
+          q_cmd[i].address <= m_address[i];
+          q_cmd[i].wr      <= m_write[i];
+          q_cmd[i].rd      <= !m_write[i] && m_read[i];
+          q_cmd[i].data    <= m_writedata[i];
+          q_cmd[i].be      <= m_byteenable[i];
+          q_cmd[i].bc      <= m_burstcount[i];
+          q_v[i]           <= 1'b1;
+        end else if (take && gnt == 2'(i)) begin
+          q_v[i] <= 1'b0;
+        end
+      end
+    end
   end
 
   wire p_taken = p_valid && !s_waitrequest;
