@@ -30,7 +30,9 @@ for mode in "layer:--no-pipeline" "pipe256:" "pipe160:--chunk 160" "pipe512:--ch
     fi
 done
 # without --check the pipeline fuses the MLP tail (PS_MLP) and residual+LN+packing (PS_RLP); --check keeps the separate steps, so test it here
-for mode in "fused:" "fused160:--chunk 160" "nofuse:--no-mlp-fuse" "norlp:--no-rlp-fuse" "nofuse_norlp:--no-mlp-fuse --no-rlp-fuse" "rlp48:--chunk 48"; do
+# The engine's RoPE epilogue and fused SwiGLU (the software engine announces them, FEATURES 0x7) against a bitstream
+# without them (--sim-features 0, what the board's h6 reads): the same logits either way, and with each of them off.
+for mode in "fused:" "fused160:--chunk 160" "nofuse:--no-mlp-fuse" "norlp:--no-rlp-fuse" "nofuse_norlp:--no-mlp-fuse --no-rlp-fuse" "rlp48:--chunk 48" "hwfeat0:--sim-features 0" "no_outfmt:--no-outfmt" "no_fused_swiglu:--no-fused-swiglu" "hw_nomlp:--no-mlp-fuse --no-rlp-fuse" "hw_noattn:--fpga-attn" "hw_nopipe:--no-pipeline"; do
     name=${mode%%:*}; opts=${mode#*:}
     CHK= run "$name" $opts
     if ! cmp -s "$tmp/base.logits" "$tmp/$name.logits"; then

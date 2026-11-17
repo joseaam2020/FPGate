@@ -67,27 +67,45 @@ size_t fpga_weights_bytes(const layer_t *L)
     return (size_t)(L->out / 16) * (256 + 16 * (size_t)L->in);
 }
 
-void fpga_pack_weights(const layer_t *L, uint8_t *dst)
+/* tile t (16 output channels) of L: 256 bytes of epilogue constants, then K words of 16 weights */
+static void pack_tile(const layer_t *L, int t, uint8_t *c)
 {
     const int K = L->in;
-    for (int t = 0; t < L->out / 16; t++) {
-        uint8_t *c = dst + (size_t)t * (256 + 16 * (size_t)K);
-        memset(c, 0, 256);
-        for (int j = 0; j < 16; j++) {
-            const int n = t * 16 + j;
-            const int32_t bias = L->bias ? L->bias[n] : 0;
-            const uint32_t b = (uint32_t)bias, m = (uint32_t)L->m0[n];
-            uint8_t *e = c + 16 * j;
-            for (int i = 0; i < 4; i++) {
-                e[i] = (uint8_t)(b >> (8 * i));
-                e[4 + i] = (uint8_t)(m >> (8 * i));
-            }
-            e[8] = (uint8_t)L->shift[n];
+    memset(c, 0, 256);
+    for (int j = 0; j < 16; j++) {
+        const int n = t * 16 + j;
+        const int32_t bias = L->bias ? L->bias[n] : 0;
+        const uint32_t b = (uint32_t)bias, m = (uint32_t)L->m0[n];
+        uint8_t *e = c + 16 * j;
+        for (int i = 0; i < 4; i++) {
+            e[i] = (uint8_t)(b >> (8 * i));
+            e[4 + i] = (uint8_t)(m >> (8 * i));
         }
-        uint8_t *w = c + 256;
-        for (int k = 0; k < K; k++)
-            for (int j = 0; j < 16; j++)
-                w[(size_t)k * 16 + j] = (uint8_t)L->w[(size_t)(t * 16 + j) * K + k];
+        e[8] = (uint8_t)L->shift[n];
+    }
+    uint8_t *w = c + 256;
+    for (int k = 0; k < K; k++)
+        for (int j = 0; j < 16; j++)
+            w[(size_t)k * 16 + j] = (uint8_t)L->w[(size_t)(t * 16 + j) * K + k];
+}
+
+void fpga_pack_weights(const layer_t *L, uint8_t *dst)
+{
+    for (int t = 0; t < L->out / 16; t++)
+        pack_tile(L, t, dst + (size_t)t * (256 + 16 * (size_t)L->in));
+}
+
+size_t fpga_weights_pair_bytes(const layer_t *G, const layer_t *U)
+{
+    return fpga_weights_bytes(G) + fpga_weights_bytes(U);
+}
+
+void fpga_pack_weights_pair(const layer_t *G, const layer_t *U, uint8_t *dst)
+{
+    const size_t tb = 256 + 16 * (size_t)G->in;
+    for (int t = 0; t < G->out / 16; t++) {
+        pack_tile(G, t, dst + (size_t)(2 * t) * tb);
+        pack_tile(U, t, dst + (size_t)(2 * t + 1) * tb);
     }
 }
 

@@ -52,6 +52,12 @@ void model_set_pipeline(model_t *m, int on);
 /* inside the pipeline, fuse the MLP tail (SwiGLU, LayerNorm, fc2 packing) by 16-row groups; on by default */
 void model_set_mlp_fuse(model_t *m, int on);
 void model_set_rlp_fuse(model_t *m, int on);
+/* Use the engine's RoPE epilogue (q and k come out rotated, INT8) and the SwiGLU fused on fc1 when the bitstream announces
+ * them in FEATURES (ACCEL_FEAT_*); otherwise (an h6 bitstream reads 0xDEADBEEF there) nothing changes. Call it BEFORE
+ * model_attach_fpga: the fused fc1 needs its gate and up weights interleaved at packing time, in place of the separate
+ * ones, so the fused blocks run fc1 on the CPU if the pipeline is not used. Both are off by default and always off with
+ * check. */
+void model_set_hw_fusion(model_t *m, int rope, int swiglu);
 /* How the FPGA attention overlaps the heads (set before the first forward). ATT_OVL_OFF (--no-att-overlap): the
  * sequential attention_fpga. ATT_OVL_AUTO (default): full overlap (softmax, engine and packing at the same time)
  * only when the engine VERSION is the h5b one (ACCEL_HW_VERSION_H5B), else pack-only with a warning.

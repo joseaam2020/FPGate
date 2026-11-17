@@ -36,7 +36,20 @@ struct accel_sim {
     accel_sm_sim_ctx_t sm_ctx;
     int sm_failed;
     uint64_t sm_cycles;
+    /* tables of the RoPE epilogue and of the fused SwiGLU, as loaded through accel_hw_load_rope / the driver */
+    int16_t rope_tab[2][2][32][16];
+    int16_t silu[ACCEL_SILU_ENTRIES];
 };
+
+void accel_sim_load_rope(accel_hw_t *h, const int16_t tab[2][2][32][16])
+{
+    memcpy(h->sim->rope_tab, tab, sizeof h->sim->rope_tab);
+}
+
+void accel_sim_load_silu(accel_hw_t *h, const int16_t *silu)
+{
+    memcpy(h->sim->silu, silu, sizeof h->sim->silu);
+}
 
 static void pause_s(double s)
 {
@@ -57,7 +70,12 @@ static void *sim_thread(void *arg)
     const int out16 = !raw && op->out_bits > 8;
     const size_t esz = raw ? 4 : out16 ? 2 : 1;
     const uint32_t base = ACCEL_REGION_PHYS;
+    const int rope = op->rope_hd != 0, sw = op->swiglu;
     sim->failed = 1;
+    if (rope && (op->rope_hd != 64 || N % 64 || raw || out16 || sw || op->row0 + (unsigned)M > 1025))
+        return NULL;
+    if (sw && (N % 32 || raw || out16 || !op->stride_out))
+        return NULL;
     if (N % 16 || (op->in_unsigned && planes != 2) || (raw && planes != 1) || op->a_phys < base || op->w_phys < base || op->out_phys < base)
         return NULL;
     const size_t stride = op->stride_out ? op->stride_out : (size_t)N * esz;
@@ -118,7 +136,52 @@ static void *sim_thread(void *arg)
     } else
         gemm_s16(a16, w8, acc, M, N, K);
     if (!raw)
-        epilogue_int(acc, M, N, bias, m0, sh, op->out_bits, y);
+        epilogue_int(acc, M, N, bias, m0, sh, rope ? 16 : op->out_bits, y);
+    if (rope) {
+        /* the RoPE unit of the epilogue (rope_unit.sv): interleaved pairs, separable Q1.14 tables, one rounding shift,
+         * saturation to +-127; token 0 is only shifted */
+        const int rsh = (int)(h->rope_cfg & 63), pre = (int)((h->rope_cfg >> 8) & 63);
+        const int64_t rnd = (int64_t)1 << (rsh - 1);
+        int16_t *y2 = malloc((size_t)M * N * sizeof *y2);
+        if (!y2)
+            goto done;
+        for (int r = 0; r < M; r++) {
+            const int t = (int)op->row0 + r;
+            for (int n = 0; n < N; n++) {
+                const int d = n % 64, half = d >> 5, pi = (d & 31) >> 1;
+                const int16_t *x = y + (size_t)r * N + n - d;
+                int64_t v;
+                if (t == 0)
+                    v = (x[d] + ((int64_t)1 << (pre - 1))) >> pre;
+                else {
+                    const int u = t - 1, yx = half ? (u & 31) : (u >> 5);
+                    const int64_t c = sim->rope_tab[0][half][yx][pi], s = sim->rope_tab[1][half][yx][pi];
+                    const int64_t rot = (d & 1) ? x[d - 1] : -(int64_t)x[d + 1];
+                    v = ((int64_t)x[d] * c + rot * s + rnd) >> rsh;
+                }
+                y2[(size_t)r * N + n] = (int16_t)(v > 127 ? 127 : v < -127 ? -127 : v);
+            }
+        }
+        free(y);
+        y = y2;
+    }
+    if (sw) {
+        /* swiglu_stage: tiles alternate gate(j), up(j); h = sat16((silu[g] * u * M0 + 2^(shift-1)) >> shift) */
+        const int64_t rnd = (int64_t)1 << (op->sw_shift - 1);
+        int16_t *hbuf = malloc((size_t)M * (N / 2) * sizeof *hbuf);
+        if (!hbuf)
+            goto done;
+        for (int r = 0; r < M; r++)
+            for (int jt = 0; jt < N / 32; jt++)
+                for (int c = 0; c < 16; c++) {
+                    const int g = y[(size_t)r * N + jt * 32 + c], u = y[(size_t)r * N + jt * 32 + 16 + c];
+                    int64_t v = (int64_t)sim->silu[g + 127] * u;
+                    v = (v * (int64_t)op->sw_m0 + rnd) >> op->sw_shift;
+                    hbuf[(size_t)r * (N / 2) + jt * 16 + c] = (int16_t)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
+                }
+        free(y);
+        y = hbuf;
+    }
 
     const double macs = (double)M * N * K;
     const double dur = macs / SIM_MACS_PER_S;
@@ -130,6 +193,8 @@ static void *sim_thread(void *arg)
             uint8_t *o = O + (size_t)r * stride;
             if (raw)
                 memcpy(o, acc + (size_t)r * N, (size_t)N * 4);
+            else if (sw)
+                memcpy(o, y + (size_t)r * (N / 2), (size_t)N);
             else if (out16)
                 memcpy(o, y + (size_t)r * N, (size_t)N * 2);
             else

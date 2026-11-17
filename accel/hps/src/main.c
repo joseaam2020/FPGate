@@ -35,11 +35,14 @@ static struct {
     int pipeline;               /* row-chunk pipeline between attentions */
     int no_rlp_fuse;            /* --no-rlp-fuse: separate residual, LayerNorm and packing steps */
     int no_mlp_fuse;            /* --no-mlp-fuse: separate MLP tail steps in the pipeline */
+    int no_outfmt;              /* --no-outfmt: RoPE on the ARM even when the engine rotates q and k in its epilogue */
+    int no_fused_swiglu;        /* --no-fused-swiglu: fc1g, fc1x and the SwiGLU on the ARM even when the engine fuses them */
+    int sim_features;           /* --sim-features MASK: FEATURES the software engine announces (-1 = all, 0 = an h6 bitstream) */
     int cpu_patch;              /* patch embedding on the CPU instead of the engine */
     int att_overlap;            /* ATT_OVL_*: how the FPGA attention overlaps its heads */
     int logits;                 /* print the logits with 9 digits (compare two runs bit by bit) */
     accel_hw_t hw;
-} g_opt = {.chunk = -1, .pipeline = 1, .att_overlap = ATT_OVL_AUTO};
+} g_opt = {.chunk = -1, .pipeline = 1, .att_overlap = ATT_OVL_AUTO, .sim_features = -1};
 
 #define FPGA_REGION_MAP 0x8000000u      /* 128 MiB, see model.c */
 
@@ -52,8 +55,14 @@ static int setup_backend(model_t *model)
     if (g_opt.sim) {
         if (accel_hw_open_sim(&g_opt.hw, FPGA_REGION_MAP) != 0)
             return -1;
+        accel_hw_sim_set_features(&g_opt.hw, ACCEL_FEAT_OUTFMT | ACCEL_FEAT_ROPE | ACCEL_FEAT_SWIGLU);
+        if (g_opt.sim_features >= 0)
+            accel_hw_sim_set_features(&g_opt.hw, (uint32_t)g_opt.sim_features);
     } else if (accel_hw_open(&g_opt.hw, FPGA_REGION_MAP) != 0)
         return -1;
+    /* the engine's RoPE epilogue and fused SwiGLU, only when FEATURES announces them; the fused fc1 only exists as
+     * interleaved weights, so it needs the pipeline (and no --check, which model_attach_fpga also enforces) */
+    model_set_hw_fusion(model, !g_opt.no_outfmt, !g_opt.no_fused_swiglu && g_opt.pipeline && g_opt.chunk != 0);
     if (model_attach_fpga(model, &g_opt.hw, g_opt.check, g_opt.verbose, g_opt.fpga_attn) != 0)
         return -1;
     if (g_opt.chunk >= 0)
@@ -606,6 +615,12 @@ int main(int argc, char **argv)
             g_opt.no_rlp_fuse = 1;
         else if (!strcmp(argv[i], "--no-mlp-fuse"))
             g_opt.no_mlp_fuse = 1;
+        else if (!strcmp(argv[i], "--no-outfmt"))
+            g_opt.no_outfmt = 1;
+        else if (!strcmp(argv[i], "--no-fused-swiglu"))
+            g_opt.no_fused_swiglu = 1;
+        else if (!strcmp(argv[i], "--sim-features") && i + 1 < argc)
+            g_opt.sim_features = (int)strtol(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--no-att-overlap"))
             g_opt.att_overlap = ATT_OVL_OFF;
         else if (!strcmp(argv[i], "--att-overlap-pack-only"))

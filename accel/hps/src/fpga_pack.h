@@ -19,6 +19,10 @@
 
 size_t fpga_weights_bytes(const layer_t *L);
 void fpga_pack_weights(const layer_t *L, uint8_t *dst);
+/* fc1 for the fused SwiGLU: the tiles of the gate layer G and of the up layer U interleaved, G(0), U(0), G(1), U(1), ...
+ * (both with the same in and out) */
+size_t fpga_weights_pair_bytes(const layer_t *G, const layer_t *U);
+void fpga_pack_weights_pair(const layer_t *G, const layer_t *U, uint8_t *dst);
 
 /* Attention operands of one head (INT8 head slices [tokens][stride], the head's first column at the pointer):
  *   Q as activations (K = hd, one plane), rows [0, tokens);

@@ -145,6 +145,9 @@ struct model {
     int pipeline, pl_cap, pl_ok;
     int rlp_fuse;                       /* PS_RLP instead of READ, RES, LN, PREP after proj and fc2 */
     int mlp_fuse;                       /* PS_MLP instead of READ(fc1x), SWIGLU, LN(mlpn), PREP(fc2) */
+    int want_hw_rope, want_hw_swiglu;   /* model_set_hw_fusion, read by model_attach_fpga */
+    int hw_rope;                        /* q and k come out of the engine already rotated (INT8), no PS_ROPE */
+    uint32_t sw_off[PKG_MAX_BLOCKS];    /* region offset of the block's interleaved gate / up weights, or 0 */
     struct pl_sched *pl_sched;          /* engine scheduler of the running pipeline, for pl_engine_tick inside a step */
     size_t pl_slot;                     /* bytes of each chunk's slot in the region's activation and output areas */
     float *pl_n[PL_MAX];                /* LayerNorm output / float input of the next layer */
@@ -463,6 +466,11 @@ typedef struct {
     int dim;                    /* LN */
     int direct;                 /* PREP: copy ctx8 (already INT8 in the layer's scale) instead of quantising pl_n */
     int16_t *dst;               /* READ: matrix [tokens][L->out] that receives the rows */
+    int8_t *dst8;               /* READ: instead of dst, an INT8 matrix [tokens][L->out] (the region holds INT8 rows) */
+    int ncols;                  /* READ: columns of INT16 rows when they are not L->out (fused SwiGLU output) */
+    int rope_hd;                /* RUN: head dimension when the epilogue rotates the output (RoPE), else 0 */
+    int sw;                     /* RUN: the fused SwiGLU of block B (interleaved weights); MLP, SWIGLU: h comes from fc1 */
+    int v_only;                 /* ROPE: only the v conversion (q and k are already rotated) */
     const int16_t *src;         /* RES: x += src * scale */
     double scale;
 } pstep_t;
@@ -498,7 +506,7 @@ static int pl_prepare(model_t *m)
         const block_t *B = &p->blocks[bi];
         const layer_t *ls[7] = {B->q, B->k, B->v, B->proj, B->fc1g, B->fc1x, B->fc2};
         for (int i = 0; i < 7; i++) {
-            if (!fpga_supports(ls[i]) || !m->w_off[ls[i] - p->layers]) {
+            if (!fpga_supports(ls[i]) || !(m->w_off[ls[i] - p->layers] || (m->sw_off[bi] && (i == 4 || i == 5)))) {
                 fprintf(stderr, "model: pipeline off: layer %s is not on the FPGA\n", ls[i]->name);
                 return 0;                   /* some layer stays on the CPU: no pipeline */
             }
@@ -584,12 +592,14 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
     }
     case PS_READ: {
         const layer_t *L = s->L;
-        const int N = L->out, out16 = L->out_bits > 8;
+        const int N = s->ncols ? s->ncols : L->out, out16 = s->dst8 ? 0 : s->ncols ? 1 : L->out_bits > 8;
         const size_t n = (size_t)nr * N;
         const uint8_t *src = m->hw->region + FPGA_O_OFF + (size_t)slot * m->pl_slot;
-        int16_t *dst = s->dst + (size_t)r0 * N;
+        int16_t *dst = s->dst8 ? NULL : s->dst + (size_t)r0 * N;
         accel_hw_inval(m->hw, FPGA_O_OFF + (size_t)slot * m->pl_slot, n * (out16 ? 2 : 1));
-        if (out16)
+        if (s->dst8)
+            memcpy(s->dst8 + (size_t)r0 * N, src, n);
+        else if (out16)
             memcpy(dst, src, n * 2);
         else {
             uint8_t *tmp = m->pl_stage[slot];
@@ -599,7 +609,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
                 dst[i] = ((const int8_t *)tmp)[i];
         }
         PL_LAP(pl_read);
-        if (m->check) {
+        if (m->check && !s->dst8 && !s->ncols) {
             if (L->in_bits == 8)
                 gemm_s8(m->pl_a8[slot], L->w, m->pl_acc[slot], nr, N, L->in);
             else
@@ -631,6 +641,14 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         const int64_t sw_rnd = (int64_t)1 << (B->sw_sh - 1);
         const int qm_in = qmax_of(p->silu_in_bits);
         const size_t off = (size_t)r0 * N;
+        if (s->sw) {
+            /* the engine did the SwiGLU: h16 was read from the region, only the float scaling is left */
+#pragma omp parallel for schedule(static)
+            for (ptrdiff_t i = 0; i < (ptrdiff_t)nr * N; i++)
+                m->hh[off + i] = (float)((double)m->h16[off + i] * B->s_h);
+            PL_LAP(pl_swiglu);
+            break;
+        }
 #pragma omp parallel for schedule(static)
         for (ptrdiff_t i = 0; i < (ptrdiff_t)nr * N; i++) {
             int64_t y = (int64_t)B->silu[m->g16[off + i] + qm_in] * m->u16[off + i];
@@ -654,7 +672,7 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         const float epsf = (float)p->ln_eps;
         const size_t o_off = FPGA_O_OFF + (size_t)slot * m->pl_slot;
         const size_t a_off = FPGA_A_OFF + (size_t)slot * m->pl_slot;
-        const int ub = B->fc1x->out_bits > 8 ? 2 : 1;      /* fc1x's output in the region: INT16 or INT8 */
+        const int ub = s->sw ? 2 : B->fc1x->out_bits > 8 ? 2 : 1;    /* the region's output: h (INT16) or fc1x's */
         const uint8_t *ureg = m->hw->region + o_off;
         int16_t *a16 = m->pl_a16[slot];
         for (int g0 = 0; g0 < nr; g0 += 16) {
@@ -668,13 +686,17 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
                 float *nrow = m->pl_row[slot] + (size_t)(16 + i) * N;
                 const int16_t *u16 = (const int16_t *)ur;
                 const int8_t *u8 = (const int8_t *)ur;
-                for (int k = 0; k < N; k++) {
-                    const int u = ub == 2 ? u16[k] : u8[k];
-                    int64_t y = (int64_t)B->silu[gr[k] + qm_in] * u;
-                    y = (y * B->sw_m0 + sw_rnd) >> B->sw_sh;
-                    const int16_t h = (int16_t)(y > 32767 ? 32767 : y < -32767 ? -32767 : y);
-                    hr[k] = (float)((double)h * B->s_h);
-                }
+                if (s->sw)
+                    for (int k = 0; k < N; k++)
+                        hr[k] = (float)((double)u16[k] * B->s_h);   /* h from the engine's fused SwiGLU */
+                else
+                    for (int k = 0; k < N; k++) {
+                        const int u = ub == 2 ? u16[k] : u8[k];
+                        int64_t y = (int64_t)B->silu[gr[k] + qm_in] * u;
+                        y = (y * B->sw_m0 + sw_rnd) >> B->sw_sh;
+                        const int16_t h = (int16_t)(y > 32767 ? 32767 : y < -32767 ? -32767 : y);
+                        hr[k] = (float)((double)h * B->s_h);
+                    }
                 layer_norm_row(hr, N, B->mlpn_g, B->mlpn_b, epsf, nrow);
                 quantize_f32(nrow, (size_t)K, L->s_x, 16, a16 + (size_t)i * K);
             }
@@ -725,8 +747,10 @@ static void pl_arm(model_t *m, const pstep_t *s, const pjob_t *j, int slot)
         const block_t *B = s->B;
         const int A = B->q->out, H = B->heads, hd = A / H;
         const size_t off = (size_t)r0 * A;
-        rope_int_range(m->q16 + off, r0, nr, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->q8 + off);
-        rope_int_range(m->k16 + off, r0, nr, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->k8 + off);
+        if (!s->v_only) {
+            rope_int_range(m->q16 + off, r0, nr, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->q8 + off);
+            rope_int_range(m->k16 + off, r0, nr, A, H, hd, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre, m->k8 + off);
+        }
 #pragma omp parallel for schedule(static)
         for (ptrdiff_t i = 0; i < (ptrdiff_t)nr * A; i++)
             m->v8[off + i] = (int8_t)m->v16[off + i];
@@ -779,7 +803,8 @@ static int pl_engine_tick(model_t *m, pl_sched_t *S)
         for (int j = 0; j < S->nj; j++) {
             if (S->jobs[j].pc >= S->ns || S->steps[S->jobs[j].pc].kind != PS_RUN)
                 continue;
-            const layer_t *L = S->steps[S->jobs[j].pc].L;
+            const pstep_t *st = &S->steps[S->jobs[j].pc];
+            const layer_t *L = st->L;
             const int K = L->in, N = L->out, planes = L->in_bits > 8 ? 2 : 1;
             accel_op_t *op = &S->op;
             memset(op, 0, sizeof *op);
@@ -788,13 +813,32 @@ static int pl_engine_tick(model_t *m, pl_sched_t *S)
             op->a_phys = ACCEL_REGION_PHYS + FPGA_A_OFF + (uint32_t)((size_t)j * m->pl_slot);
             op->w_phys = ACCEL_REGION_PHYS + m->w_off[L - m->p->layers];
             op->out_phys = ACCEL_REGION_PHYS + FPGA_O_OFF + (uint32_t)((size_t)j * m->pl_slot);
+            const char *name = L->name;
+            if (st->rope_hd) {
+                /* RoPE in the epilogue: INT8 rows, already rotated; the token of row 0 is the chunk's first row */
+                op->out_bits = 8;
+                op->rope_hd = (uint32_t)st->rope_hd;
+                op->row0 = (uint32_t)S->jobs[j].row0;
+            } else if (st->sw) {
+                /* fc1 with the fused SwiGLU: gate and up tiles interleaved, INT16 h of B->neurons columns */
+                const block_t *B = st->B;
+                op->N = 2u * (uint32_t)B->neurons;
+                op->out_bits = 8;
+                op->w_phys = ACCEL_REGION_PHYS + m->sw_off[B - m->p->blocks];
+                op->stride_out = 2u * (uint32_t)B->neurons;
+                op->swiglu = 1;
+                op->sw_tab = B->silu;
+                op->sw_m0 = (uint32_t)B->sw_m0;
+                op->sw_shift = (uint32_t)B->sw_sh;
+                name = "fc1_swiglu";
+            }
             if (accel_hw_start(m->hw, op) != 0)
                 return -1;
             S->inflight = j;
             S->t_op = now_s();
             S->t_end = 0;
             S->in_j = j;
-            S->in_name = L->name;
+            S->in_name = name;
             break;
         }
     }
@@ -880,22 +924,51 @@ static pstep_t *pl_add(pstep_t *s, int *n, pstep_kind k)
     return r;
 }
 
-/* PREP (unless the previous layer's quantised input is reused), RUN, READ */
-static void pl_linear(pstep_t *s, int *n, const layer_t *L, const layer_t *prev, int16_t *dst, int direct)
+/* PREP (unless the previous layer's quantised input is reused), RUN, READ. With rope_hd the epilogue rotates the output
+ * (RoPE) and the INT8 rows go to dst8; dst8 alone reads an INT8 layer straight into an INT8 matrix. */
+static void pl_linear_ex(pstep_t *s, int *n, const layer_t *L, const layer_t *prev, int16_t *dst, int8_t *dst8,
+                         int rope_hd, int direct)
 {
     const int reuse = prev && prev->s_x == L->s_x && prev->in_bits == L->in_bits && prev->in == L->in && !direct;
     if (!reuse) {
         pstep_t *p = pl_add(s, n, PS_PREP);
         p->L = L; p->direct = direct;
     }
-    pl_add(s, n, PS_RUN)->L = L;
+    pstep_t *u = pl_add(s, n, PS_RUN);
+    u->L = L; u->rope_hd = rope_hd;
     pstep_t *r = pl_add(s, n, PS_READ);
-    r->L = L; r->dst = dst;
+    r->L = L; r->dst = dst; r->dst8 = dst8;
+}
+
+static void pl_linear(pstep_t *s, int *n, const layer_t *L, const layer_t *prev, int16_t *dst, int direct)
+{
+    pl_linear_ex(s, n, L, prev, dst, NULL, 0, direct);
 }
 
 /* LayerNorm 1 of block B, q, k, v and RoPE: what a block starts with */
 static void pl_block_head(model_t *m, pstep_t *s, int *n, const block_t *B, int fused)
 {
+    if (m->hw_rope) {
+        /* q and k are rotated by the engine's epilogue and read as INT8 straight into q8 / k8; v (INT8) too */
+        const int hd = B->q->out / B->heads, v8 = B->v->out_bits == 8;
+        if (fused) {
+            pstep_t *u = pl_add(s, n, PS_RUN);
+            u->L = B->q; u->rope_hd = hd;
+            pstep_t *r = pl_add(s, n, PS_READ);
+            r->L = B->q; r->dst8 = m->q8;
+        } else {
+            pstep_t *ln = pl_add(s, n, PS_LN);
+            ln->dim = m->dim; ln->g = B->n1_g; ln->b = B->n1_b;
+            pl_linear_ex(s, n, B->q, NULL, NULL, m->q8, hd, 0);
+        }
+        pl_linear_ex(s, n, B->k, B->q, NULL, m->k8, hd, 0);
+        pl_linear_ex(s, n, B->v, B->k, v8 ? NULL : m->v16, v8 ? m->v8 : NULL, 0, 0);
+        if (!v8) {
+            pstep_t *r = pl_add(s, n, PS_ROPE);
+            r->B = B; r->v_only = 1;
+        }
+        return;
+    }
     if (fused) {
         /* a PS_RLP before this already did LN 1 and the packing of q's input */
         pl_add(s, n, PS_RUN)->L = B->q;
@@ -929,6 +1002,10 @@ static int pl_after_attention(model_t *m, int bi, int nb)
     if (!ctx_direct)
         pl_add(s, &n, PS_CTXF)->B = B;
     pstep_t *ln;
+    /* fused SwiGLU on fc1: one engine operation over the interleaved gate / up weights gives h (INT16), instead of
+     * fc1g, fc1x and the SwiGLU on the ARM (the weights of such a block exist only interleaved, see model_attach_fpga) */
+    const int swf = m->sw_off[bi] != 0;
+    pstep_t *swrun = NULL;
     if (rlp1) {
         pstep_t *pp = pl_add(s, &n, PS_PREP);
         pp->L = B->proj; pp->direct = ctx_direct;
@@ -936,16 +1013,28 @@ static int pl_after_attention(model_t *m, int bi, int nb)
         pstep_t *f = pl_add(s, &n, PS_RLP);
         f->L = B->proj; f->L2 = B->fc1g; f->scale = B->s_proj;
         f->dim = m->dim; f->g = B->n2_g; f->b = B->n2_b;
-        pl_add(s, &n, PS_RUN)->L = B->fc1g;
-        pstep_t *rd = pl_add(s, &n, PS_READ);
-        rd->L = B->fc1g; rd->dst = m->g16;
+        if (swf) {
+            swrun = pl_add(s, &n, PS_RUN);
+        } else {
+            pl_add(s, &n, PS_RUN)->L = B->fc1g;
+            pstep_t *rd = pl_add(s, &n, PS_READ);
+            rd->L = B->fc1g; rd->dst = m->g16;
+        }
     } else {
         pl_linear(s, &n, B->proj, NULL, m->y16, ctx_direct);
         pstep_t *r = pl_add(s, &n, PS_RES);
         r->src = m->y16; r->scale = B->s_proj;
         ln = pl_add(s, &n, PS_LN);
         ln->dim = m->dim; ln->g = B->n2_g; ln->b = B->n2_b;
-        pl_linear(s, &n, B->fc1g, NULL, m->g16, 0);
+        if (swf) {
+            pstep_t *pp = pl_add(s, &n, PS_PREP);
+            pp->L = B->fc1g;
+            swrun = pl_add(s, &n, PS_RUN);
+        } else
+            pl_linear(s, &n, B->fc1g, NULL, m->g16, 0);
+    }
+    if (swrun) {
+        swrun->L = B->fc1g; swrun->B = B; swrun->sw = 1;
     }
     /* fused MLP tail (not with --check: the per-layer verification needs the separate steps). fc1g and fc1x
      * share the output slot, so READ(fc1g) -> g16 stays: a second output slot per chunk does not fit the 8 MiB
@@ -953,7 +1042,22 @@ static int pl_after_attention(model_t *m, int bi, int nb)
     const int fuse = !m->check && m->mlp_fuse && B->fc2->in_bits > 8 && B->fc2->in == B->neurons &&
                      B->fc1x->out == B->neurons && B->fc1x->s_x == B->fc1g->s_x &&
                      B->fc1x->in_bits == B->fc1g->in_bits && B->fc1x->in == B->fc1g->in;
-    if (fuse) {
+    const int fuse_sw = !m->check && m->mlp_fuse && B->fc2->in_bits > 8 && B->fc2->in == B->neurons;
+    if (swf && fuse_sw) {
+        pstep_t *f = pl_add(s, &n, PS_MLP);
+        f->B = B; f->sw = 1;
+        pl_add(s, &n, PS_RUN)->L = B->fc2;
+    } else if (swf) {
+        pstep_t *rd = pl_add(s, &n, PS_READ);
+        rd->L = B->fc1g; rd->dst = m->h16; rd->ncols = B->neurons;
+        pstep_t *f = pl_add(s, &n, PS_SWIGLU);
+        f->B = B; f->sw = 1;
+        ln = pl_add(s, &n, PS_LN);
+        ln->from_hh = 1; ln->dim = B->neurons; ln->g = B->mlpn_g; ln->b = B->mlpn_b;
+        pstep_t *pp = pl_add(s, &n, PS_PREP);
+        pp->L = B->fc2;
+        pl_add(s, &n, PS_RUN)->L = B->fc2;
+    } else if (fuse) {
         pl_add(s, &n, PS_RUN)->L = B->fc1x;   /* reuses fc1g's quantised input */
         pl_add(s, &n, PS_MLP)->B = B;
         pl_add(s, &n, PS_RUN)->L = B->fc2;
@@ -1563,12 +1667,32 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     size_t max_stage = 0, max_out = 0;
     uint32_t off = FPGA_W_OFF;
     double t0 = now_s();
-    int n_fpga = 0;
+    int n_fpga = 0, n_sw = 0;
     uint8_t *tile = NULL;
     size_t tile_len = 0;
+    /* fused SwiGLU: the fc1 gate and up weights of an eligible block are packed interleaved, and only that way (the
+     * region has no room for a second copy), so these two layers cannot run on the engine on their own: the paths that
+     * do not use the pipeline (and --check, which turns the fusion off here) never get this */
+    uint8_t skip[PKG_MAX_LAYERS] = {0};
+    memset(m->sw_off, 0, sizeof m->sw_off);
+    if (m->want_hw_swiglu && (hw->features & ACCEL_FEAT_SWIGLU) && !check && p->silu_in_bits == 8)
+        for (int bi = 0; bi < p->n_blocks; bi++) {
+            const block_t *B = &p->blocks[bi];
+            const layer_t *G = B->fc1g, *U = B->fc1x;
+            if (fpga_supports(G) && fpga_supports(U) && G->out == U->out && G->in == U->in && G->s_x == U->s_x &&
+                G->in_bits == U->in_bits && G->out_bits == 8 && U->out_bits == 8 && G->out == B->neurons &&
+                B->sw_m0 > 0 && B->sw_m0 < ((int64_t)1 << 31) && B->sw_sh >= 1 && B->sw_sh <= 63)
+                skip[G - p->layers] = skip[U - p->layers] = 1;
+        }
     for (int i = 0; i < p->n_layers; i++) {
         const layer_t *L = &p->layers[i];
         if (!fpga_supports(L))
+            continue;
+        const size_t a = fpga_acts_bytes(m->tokens, L->in, L->in_bits > 8 ? 2 : 1);
+        const size_t o = (size_t)m->tokens * L->out * (L->out_bits > 8 ? 2 : 1);
+        if (a > max_stage) max_stage = a;
+        if (o > max_out) max_out = o;
+        if (skip[i])
             continue;
         const size_t bytes = fpga_weights_bytes(L);
         if (off + bytes > ATT_OFF) {
@@ -1587,10 +1711,28 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
         m->w_off[i] = off;
         off = (off + (uint32_t)bytes + 63u) & ~63u;
         n_fpga++;
-        const size_t a = fpga_acts_bytes(m->tokens, L->in, L->in_bits > 8 ? 2 : 1);
-        const size_t o = (size_t)m->tokens * L->out * (L->out_bits > 8 ? 2 : 1);
-        if (a > max_stage) max_stage = a;
-        if (o > max_out) max_out = o;
+    }
+    for (int bi = 0; bi < p->n_blocks; bi++) {
+        const block_t *B = &p->blocks[bi];
+        if (!skip[B->fc1g - p->layers])
+            continue;
+        const size_t bytes = fpga_weights_pair_bytes(B->fc1g, B->fc1x);
+        if (off + bytes > ATT_OFF) {
+            fprintf(stderr, "model: the packed weights do not fit the reserved region\n");
+            free(tile);
+            return -1;
+        }
+        if (bytes > tile_len) {
+            free(tile);
+            tile = malloc(bytes);
+            tile_len = bytes;
+        }
+        fpga_pack_weights_pair(B->fc1g, B->fc1x, tile);
+        memcpy(hw->region + off, tile, bytes);
+        accel_hw_clean(hw, off, bytes);
+        m->sw_off[bi] = off;
+        off = (off + (uint32_t)bytes + 63u) & ~63u;
+        n_sw++;
     }
     free(tile);
     if (max_stage > FPGA_O_OFF - FPGA_A_OFF || max_out > FPGA_W_OFF - FPGA_O_OFF) {
@@ -1609,6 +1751,19 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     m->pipeline = 1;
     m->mlp_fuse = 1;
     m->rlp_fuse = 1;
+    /* RoPE in the engine's epilogue (T41): q and k leave the engine rotated. Not with --check, which compares q / k
+     * before the rotation with the CPU. The bitstream must announce it and the tables must be separable. */
+    m->hw_rope = 0;
+    if (m->want_hw_rope && (hw->features & ACCEL_FEAT_ROPE) && !check && m->tokens <= 1025) {
+        int ok = 1;
+        for (int bi = 0; bi < p->n_blocks; bi++) {
+            const block_t *B = &p->blocks[bi];
+            ok &= B->heads > 0 && B->q->out == B->k->out && B->q->out / B->heads == 64 && B->q->out_bits == 16 &&
+                  B->k->out_bits == 16 && B->q->s_x == B->k->s_x;
+        }
+        if (ok && accel_hw_load_rope(hw, p->rope_cos, p->rope_sin, p->rope_frac, p->rope_pre) == 0)
+            m->hw_rope = 1;
+    }
     if (fpga_attn) {
         if (!hw->has_softmax) {
             fprintf(stderr, "model: --fpga-attn needs a bitstream with the softmax unit (registers at 0x100)\n");
@@ -1627,6 +1782,11 @@ int model_attach_fpga(model_t *m, accel_hw_t *hw, int check, int verbose, int fp
     }
     fprintf(stderr, "model: %d layers packed into the FPGA region (%.1f MiB of weights) in %.1f s\n", n_fpga,
             (off - FPGA_W_OFF) / 1048576.0, now_s() - t0);
+    if (n_sw || m->hw_rope)
+        fprintf(stderr, "model: engine features 0x%x: %s%s%s\n", hw->features, m->hw_rope ? "RoPE in the epilogue" : "",
+                m->hw_rope && n_sw ? ", " : "", n_sw ? "fused SwiGLU on fc1 (weights interleaved)" : "");
+    else if (m->want_hw_rope || m->want_hw_swiglu)
+        fprintf(stderr, "model: engine features 0x%x: RoPE and SwiGLU stay on the ARM\n", hw->features);
     return 0;
 }
 
@@ -1634,6 +1794,11 @@ void model_limit_blocks(model_t *m, int n) { m->max_blocks = n; }
 void model_set_chunk(model_t *m, int rows) { m->chunk_rows = rows <= 0 ? 0 : (rows + 15) & ~15; }
 void model_set_pipeline(model_t *m, int on) { m->pipeline = on; }
 void model_set_mlp_fuse(model_t *m, int on) { m->mlp_fuse = on; }
+void model_set_hw_fusion(model_t *m, int rope, int swiglu)
+{
+    m->want_hw_rope = rope;
+    m->want_hw_swiglu = swiglu;
+}
 void model_set_rlp_fuse(model_t *m, int on) { m->rlp_fuse = on; }
 const model_stats_t *model_stats(const model_t *m) { return &m->st; }
 void model_stats_reset(model_t *m) { memset(&m->st, 0, sizeof m->st); }

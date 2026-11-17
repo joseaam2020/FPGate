@@ -19,6 +19,12 @@
 /* engine VERSION low half of the bitstream with the output FIFO credit and the clean abort (T37, "h5b"): with it
  * the softmax unit and the engine can run at the same time without risking an output FIFO overflow. */
 #define ACCEL_HW_VERSION_H5B 2
+/* FEATURES register (0x98) bits: the output layout writer, RoPE in the epilogue and the SwiGLU fused on fc1 (T41, T42). A
+ * bitstream without the register (h5, h5b, h6) reads 0xDEADBEEF there, which accel_hw_open turns into 0. */
+#define ACCEL_FEAT_OUTFMT (1u << 0)
+#define ACCEL_FEAT_ROPE (1u << 1)
+#define ACCEL_FEAT_SWIGLU (1u << 2)
+#define ACCEL_SILU_ENTRIES 255      /* SiLU table of the fused SwiGLU: index = gate + 127 */
 
 typedef struct accel_hw {
     int fd;
@@ -30,6 +36,9 @@ typedef struct accel_hw {
     double mhz;                 /* accelerator clock measured with HEARTBEAT at open */
     int hw_version;             /* engine VERSION low half: 1 = h5, 2 = h5b (output FIFO credit, clean abort) */
     int has_softmax;            /* the bitstream has the attention softmax unit (registers at 0x100) */
+    uint32_t features;          /* ACCEL_FEAT_* bits the bitstream announces (0 when FEATURES is not implemented) */
+    uint32_t rope_cfg;          /* ROPE_CFG register value set by accel_hw_load_rope */
+    const int16_t *silu_loaded; /* source of the SiLU table currently in the hardware (identity only), or NULL */
     struct accel_sim *sim;      /* software engine (accel_hw_open_sim); NULL on the real hardware */
     double t_start;             /* wall time of the last accel_hw_start */
     int in_flight;              /* an operation was started and not yet collected with accel_hw_wait */
@@ -44,6 +53,16 @@ typedef struct {
     int in_unsigned;            /* 16-bit input is UQ (attention probabilities); default: signed */
     int raw32;                  /* output the INT32 accumulators unchanged (attention scores) */
     uint32_t stride_out;        /* bytes between output rows; 0 = N * element size */
+    /* RoPE in the epilogue (needs ACCEL_FEAT_ROPE and accel_hw_load_rope): the epilogue output (out_bits must be 8 in
+     * the descriptor, the layer's own INT16 epilogue is implied) is rotated and written as INT8, row-major.
+     * rope_hd = head dimension (64) of the output channels, 0 = off; row0 = sequence index of row 0. */
+    uint32_t rope_hd, row0;
+    /* fused SwiGLU on fc1 (needs ACCEL_FEAT_SWIGLU): the weights are interleaved gate / up tiles, N = 2 * neurons (a
+     * multiple of 32), out_bits 8 (INT8 gate and up), the output is INT16 h [M][N / 2]: set stride_out explicitly
+     * (bytes per row). sw_tab = SiLU table of ACCEL_SILU_ENTRIES entries, sw_m0 / sw_shift = requantisation. */
+    int swiglu;
+    const int16_t *sw_tab;
+    uint32_t sw_m0, sw_shift;
 } accel_op_t;
 
 typedef struct {
@@ -88,6 +107,14 @@ int accel_hw_sm_start(accel_hw_t *h, const accel_sm_op_t *op);
 int accel_hw_sm_busy(const accel_hw_t *h);
 int accel_hw_sm_wait(accel_hw_t *h, const accel_sm_op_t *op, accel_stat_t *st, double timeout_s);
 
+/* Loads the RoPE tables of the epilogue (cos, sin: [1024][64] Q1.14, row t-1 for token t, separable for hd = 64) and its
+ * shifts; once, before the first operation with rope_hd. 0 on success, -1 without ACCEL_FEAT_ROPE or on a table
+ * that is not separable (the hardware keeps 2 x 2 x 32 x 16 entries instead of 1024 x 64 x 2). */
+int accel_hw_load_rope(accel_hw_t *h, const int16_t *cos_tab, const int16_t *sin_tab, int frac, int pre_shift);
+
+/* Software engine only: replace the features it announces (tests of the path of a bitstream without them). */
+void accel_hw_sim_set_features(accel_hw_t *h, uint32_t mask);
+
 /* Software model of the linear engine, for testing on a PC (no FPGA, no /dev/mem): the region is
  * ordinary memory and an operation runs on a worker thread that decodes the same packed formats and
  * writes the output progressively after a delay proportional to its size, so ordering mistakes
@@ -111,6 +138,8 @@ int accel_hw_busy(const accel_hw_t *h);
 int accel_sim_busy(const accel_hw_t *h);
 int accel_sim_start(accel_hw_t *h, const accel_op_t *op);
 int accel_sim_wait(accel_hw_t *h, accel_stat_t *st);
+void accel_sim_load_rope(accel_hw_t *h, const int16_t tab[2][2][32][16]);
+void accel_sim_load_silu(accel_hw_t *h, const int16_t *silu);
 void accel_sim_free(accel_hw_t *h);
 /* software softmax unit: one operation in flight; sm_op.sim_ctx must point to an accel_sm_sim_ctx_t */
 int accel_sim_sm_start(accel_hw_t *h, const accel_sm_op_t *op);

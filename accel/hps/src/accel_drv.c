@@ -34,6 +34,17 @@ static int g_cached_mode = -1;      /* accel_hw_set_cached */
 #define R_BYTES_WR 0x44
 #define R_HEARTBEAT 0x48
 #define R_STRIDE_OUT 0x4C
+/* output layout writer, RoPE and fused SwiGLU (csr.sv); 0x98 FEATURES reads 0xDEADBEEF on a bitstream without them */
+#define R_OUT_TSTRIDE 0x80
+#define R_HEAD_TILES 0x84
+#define R_HEAD_STRIDE 0x88
+#define R_ROW0 0x8C
+#define R_ROPE_CFG 0x90
+#define R_ROPE_TAB 0x94
+#define R_FEATURES 0x98
+#define R_SW_M0 0xA0
+#define R_SW_SHIFT 0xA4
+#define R_SW_TAB 0xA8
 
 /* softmax unit register block (csr_sm.sv) */
 #define SM_BASE 0x100
@@ -133,6 +144,10 @@ int accel_hw_open(accel_hw_t *h, size_t region_len)
         return -1;
     }
     h->hw_version = (int)(v & 0xFFFFu);
+    {
+        const uint32_t f = rd(h, R_FEATURES);
+        h->features = (f & ~7u) == 0 ? f : 0;       /* 0xDEADBEEF: the register does not exist */
+    }
     wr(h, R_CTRL, CTRL_RESET_SOFT);
     wr(h, R_CTRL, CTRL_CLEAR_ERR);
     {
@@ -208,6 +223,69 @@ void accel_hw_inval(const accel_hw_t *h, size_t off, size_t len)
     cache_op(h, FPGATE_MEM_INVAL, off, len, "accel: cache invalidate");
 }
 
+/* SiLU table of the fused SwiGLU: index = gate + 127. Only while the engine is idle. */
+static void load_silu(accel_hw_t *h, const int16_t *tab)
+{
+    if (h->sim)
+        accel_sim_load_silu(h, tab);
+    else
+        for (uint32_t i = 0; i < ACCEL_SILU_ENTRIES; i++)
+            wr(h, R_SW_TAB, (i << 16) | (uint16_t)tab[i]);
+    h->silu_loaded = tab;
+}
+
+/* the hardware keeps the RoPE tables of a head of 64 as four RAMs of 512 x 16 bit (cos / sin x pair lane), indexed
+ * {half = d[5], yx (y when half = 0, x when half = 1), pair in half}: tab[sin][half][yx][pair]. The class token's
+ * row is not in the tables (token 0 is not rotated), the token t = 1 + 32 * y + x uses row t - 1. Returns -1 when the
+ * real tables are not of that form. */
+static int rope_separate(const int16_t *cos_tab, const int16_t *sin_tab, int16_t tab[2][2][32][16])
+{
+    for (int sn = 0; sn < 2; sn++) {
+        const int16_t *t = sn ? sin_tab : cos_tab;
+        for (int u = 0; u < 1024; u++) {
+            const int y = u >> 5, x = u & 31;
+            for (int d = 0; d < 64; d++) {
+                const int16_t v = t[(size_t)u * 64 + d];
+                const int src = d < 32 ? y * 32 : x;                 /* the y-only half, the x-only half */
+                if (v != t[(size_t)src * 64 + d] || ((d & 1) && v != t[(size_t)u * 64 + d - 1]))
+                    return -1;
+                if (d < 32 ? x == 0 : y == 0)
+                    tab[sn][d >> 5][d < 32 ? y : x][(d & 31) >> 1] = v;
+            }
+        }
+    }
+    return 0;
+}
+
+int accel_hw_load_rope(accel_hw_t *h, const int16_t *cos_tab, const int16_t *sin_tab, int frac, int pre_shift)
+{
+    static int16_t tab[2][2][32][16];
+    if (!(h->features & ACCEL_FEAT_ROPE)) {
+        fprintf(stderr, "accel: this bitstream has no RoPE epilogue\n");
+        return -1;
+    }
+    if (frac + pre_shift < 1 || frac + pre_shift > 63 || pre_shift < 1 || pre_shift > 63 || rope_separate(cos_tab, sin_tab, tab) != 0) {
+        fprintf(stderr, "accel: the RoPE tables are not separable (or the shifts are out of range)\n");
+        return -1;
+    }
+    h->rope_cfg = ((uint32_t)pre_shift << 8) | (uint32_t)(frac + pre_shift);
+    if (h->sim) {
+        accel_sim_load_rope(h, tab);
+        return 0;
+    }
+    for (uint32_t sn = 0; sn < 2; sn++)
+        for (uint32_t half = 0; half < 2; half++)
+            for (uint32_t yx = 0; yx < 32; yx++)
+                for (uint32_t pi = 0; pi < 16; pi++)
+                    wr(h, R_ROPE_TAB, (sn << 26) | (((half << 9) | (yx << 4) | pi) << 16) | (uint16_t)tab[sn][half][yx][pi]);
+    return 0;
+}
+
+void accel_hw_sim_set_features(accel_hw_t *h, uint32_t mask)
+{
+    h->features = mask & 7u;
+}
+
 int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
 {
     if (h->in_flight) {
@@ -216,6 +294,12 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
         return -1;
     }
     if (h->sim) {
+        if ((op->rope_hd && !(h->features & ACCEL_FEAT_ROPE)) || (op->swiglu && !(h->features & ACCEL_FEAT_SWIGLU))) {
+            fprintf(stderr, "accel(sim): RoPE / SwiGLU requested but the engine does not announce it\n");
+            return -1;
+        }
+        if (op->swiglu && h->silu_loaded != op->sw_tab && op->sw_tab)
+            load_silu(h, op->sw_tab);
         if (accel_sim_start(h, op) != 0)
             return -1;
         h->in_flight = 1;
@@ -223,7 +307,30 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
     }
     const int out16 = op->out_bits > 8 && !op->raw32;
     const uint32_t elem = op->raw32 ? 4u : (out16 ? 2u : 1u);
+    if ((op->rope_hd && (!(h->features & ACCEL_FEAT_ROPE) || out16 || op->raw32 || op->swiglu)) ||
+        (op->swiglu && (!(h->features & ACCEL_FEAT_SWIGLU) || out16 || op->raw32 || !op->sw_tab || (op->N & 31) ||
+                        !op->stride_out))) {
+        fprintf(stderr, "accel: operation M=%u N=%u K=%u asks for a RoPE / SwiGLU mode this bitstream or descriptor "
+                        "does not support (FEATURES 0x%x)\n", op->M, op->N, op->K, h->features);
+        return -1;
+    }
     wr(h, R_CTRL, CTRL_RESET_SOFT);          /* clean state, clears the counters */
+    if (h->features & (ACCEL_FEAT_OUTFMT | ACCEL_FEAT_ROPE)) {
+        /* these registers survive the soft reset and also shape row-major outputs (the head jump), so every
+         * operation sets them, not only the ones that use them */
+        wr(h, R_OUT_TSTRIDE, 0);
+        wr(h, R_HEAD_TILES, op->rope_hd ? op->rope_hd / 16 : 0);
+        wr(h, R_HEAD_STRIDE, op->rope_hd);
+        wr(h, R_ROW0, op->row0);
+        if (op->rope_hd)
+            wr(h, R_ROPE_CFG, h->rope_cfg);
+    }
+    if (op->swiglu) {
+        wr(h, R_SW_M0, op->sw_m0);
+        wr(h, R_SW_SHIFT, op->sw_shift);
+        if (h->silu_loaded != op->sw_tab)
+            load_silu(h, op->sw_tab);
+    }
     wr(h, R_ADDR_A, op->a_phys);
     wr(h, R_ADDR_W, op->w_phys);
     wr(h, R_ADDR_OUT, op->out_phys);
@@ -231,8 +338,9 @@ int accel_hw_start(accel_hw_t *h, const accel_op_t *op)
     wr(h, R_DIM_M, op->M);
     wr(h, R_DIM_N, op->N);
     wr(h, R_DIM_K, op->K);
-    wr(h, R_OP, ((uint32_t)op->spp << 8) | ((uint32_t)op->raw32 << 3) | ((uint32_t)out16 << 2) |
-                    ((uint32_t)(!op->in_unsigned) << 1) | (op->in_bits > 8));
+    wr(h, R_OP, ((uint32_t)op->spp << 8) | ((uint32_t)(op->swiglu != 0) << 7) | ((uint32_t)(op->rope_hd != 0) << 6) |
+                    ((uint32_t)op->raw32 << 3) | ((uint32_t)out16 << 2) | ((uint32_t)(!op->in_unsigned) << 1) |
+                    (op->in_bits > 8));
     __sync_synchronize();
     h->t_start = now_s();
     wr(h, R_CTRL, CTRL_START);
