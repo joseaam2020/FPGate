@@ -10,6 +10,8 @@
 //     row of a 16-column tile is 64 bytes, two beats, at ADDR_OUT + row * STRIDE_OUT + tile * 64),
 //     [5:4] OUTFMT (0 row-major, 1 / 2 transposed 16 x 16 byte blocks for Q / K^T, 3 row-major with the tile stride
 //     of OUT_TSTRIDE, for V), [6] ROPE (INT16 epilogue output rotated by RoPE into INT8; token = ROW0 + row),
+//     [7] SWIGLU (fused fc1: tiles alternate gate(j), up(j); INT8 epilogue; the output is h of INT16 per pair, N output
+//     channels = DIM_N / 2; at most 16 subtiles per panel, DIM_N a multiple of 32; see swiglu_stage),
 //     [15:8] subtiles per panel.
 //   OUTFMT 1 / 2 (INT8 output only): the 16 rows x 16 channels of a (subtile, tile) pair are written as 16 words of
 //   16 bytes (word d = channel d, byte j = row j; rows past M are zero) = 8 beats at ADDR_OUT + subtile * STRIDE_OUT * 16
@@ -39,6 +41,9 @@ module gemm_engine
   input  logic [31:0]  out_tstride, head_tiles, head_stride, row0, rope_cfg,
   input  logic         rope_tab_we,
   input  logic [31:0]  rope_tab_data,
+  input  logic [31:0]  sw_m0, sw_shift,          // SwiGLU requantisation constants of the block
+  input  logic         sw_tab_we,                // SiLU table entry: [15:0] value, [23:16] index
+  input  logic [31:0]  sw_tab_data,
   output logic         hw_done,
   output logic         hw_err_valid,
   output logic [7:0]   hw_err_code,
@@ -69,6 +74,8 @@ module gemm_engine
   wire [1:0] ofmt = op[5:4];
   wire tr      = (ofmt == 2'd1) || (ofmt == 2'd2);
   wire rope    = op[6];
+  wire swiglu  = op[7];
+  wire o16     = out16 | swiglu;           // the rows written to memory are INT16 (the epilogue itself stays INT8 for SwiGLU)
   wire [7:0] spp = op[15:8];
 
   // ---- resets ---------------------------------------------------------------
@@ -94,6 +101,8 @@ module gemm_engine
   logic [4:0]  sub_rows_valid;
   logic [15:0] sub_row0;
   logic [1:0]  sub_th;
+  logic        sub_up;
+  logic [3:0]  sub_sidx;
   logic        row_last_seen, lt_busy, wr_idle, progress, ext_err_valid;
   logic [7:0]  ext_err_code;
   logic        seq_busy;
@@ -102,9 +111,9 @@ module gemm_engine
 
   tile_sequencer #(.A_WORDS(A_BEATS * 2), .W_BEATS(W_BEATS), .WD_LIMIT(WD_LIMIT)) u_seq (
     .clk, .rst_n(rst_seq), .start,
-    .op_in16(in16), .op_out16(out16), .op_raw32(raw32), .op_tr(tr), .op_rope(rope), .sub_per_panel(spp),
+    .op_in16(in16), .op_out16(out16), .op_raw32(raw32), .op_tr(tr), .op_rope(rope), .op_swiglu(swiglu), .sub_per_panel(spp),
     .dim_m, .dim_n, .dim_k, .addr_a, .addr_w, .addr_out, .stride_out,
-    .out_tstride, .head_tiles, .head_stride, .row0, .sub_row0, .sub_th,
+    .out_tstride, .head_tiles, .head_stride, .row0, .sub_row0, .sub_th, .sub_up, .sub_sidx,
     .rd_cmd_valid, .rd_cmd_ready, .rd_cmd_addr, .rd_cmd_beats, .rd_to_a, .rd_done, .rd_err,
     .w_load_sel, .w_comp_sel,
     .fd_start, .fd_a_base, .fd_k, .fd_two_pass,
@@ -217,9 +226,21 @@ module gemm_engine
     .in_valid(lt_row_valid), .in_data(lt_row_data), .in_last(lt_row_last),
     .out_valid(rp_row_valid), .out_data(rp_row_data), .out_last(rp_row_last), .busy(rp_busy)
   );
-  assign row_valid = rope ? rp_row_valid : lt_row_valid;
-  assign row_data  = rope ? rp_row_data  : lt_row_data;
-  assign row_last  = rope ? rp_row_last  : lt_row_last;
+
+  // SwiGLU between the epilogue (INT8 gate / up rows) and the output rows; gate rows come out as skipped rows
+  logic                         sw_room, sw_ok, sw_row_valid, sw_row_last, sw_skip;
+  logic signed [COLS-1:0][15:0] sw_row_data;
+  swiglu_stage #(.COLS(COLS)) u_sw (
+    .clk, .rst_n(rst_dp), .en(swiglu), .m0(sw_m0[30:0]), .shift(sw_shift[5:0]),
+    .tbl_we(sw_tab_we), .tbl_addr(sw_tab_data[23:16]), .tbl_data(sw_tab_data[15:0]),
+    .ctx_push(sub_start), .ctx_up(sub_up), .ctx_sidx(sub_sidx),
+    .in_valid(lt_row_valid), .in_data(lt_row_data), .in_last(lt_row_last),
+    .room(sw_room), .out_ok(sw_ok),
+    .out_valid(sw_row_valid), .out_data(sw_row_data), .out_last(sw_row_last), .out_skip(sw_skip)
+  );
+  assign row_valid = swiglu ? sw_row_valid : rope ? rp_row_valid : lt_row_valid;
+  assign row_data  = swiglu ? sw_row_data  : rope ? rp_row_data  : lt_row_data;
+  assign row_last  = swiglu ? sw_row_last  : rope ? rp_row_last  : lt_row_last;
 
   // ---- output rows: address, byte enables, FIFO ----------------------------------------
   // Two subtile contexts: the one whose rows are coming out (cur) and the next one,
@@ -277,7 +298,7 @@ module gemm_engine
       row_bus[16*j +: 16]  = row_data[j];
       row_bytes[8*j +: 8]  = row_data[j][7:0];
     end
-    if (out16) begin
+    if (o16) begin
       row_lane = row_bus;
       row_be   = 32'hFFFF_FFFF;
     end else begin
@@ -287,7 +308,7 @@ module gemm_engine
   end
 
   logic         wr_in_valid, wr_in_ready, wr_busy, wr_beat, wr_err, wr_win_err;
-  wire push = row_valid && (rcnt < rows_valid_q) && !tr;
+  wire push = row_valid && (rcnt < rows_valid_q) && !tr && !(swiglu && sw_skip);
 
   localparam int FW = $clog2(OUT_FIFO);
   logic [319:0] fifo_mem [OUT_FIFO];
@@ -403,6 +424,9 @@ module gemm_engine
   // free FIFO entries (registered; counts the raw32 half row that is still to be written)
   logic [FW:0] fifo_used;
   assign fifo_used = wp - rp;                  // modulo 2*OUT_FIFO, so computed at the pointer width
+
+  // the stage starts a row only while the FIFO can take it and the rows still in its pipeline (6 entries)
+  assign sw_ok = (32'(fifo_used) + 32'd6) <= OUT_FIFO;
   always_ff @(posedge clk) begin
     if (!rst_dp) fifo_free <= 8'(OUT_FIFO);
     else         fifo_free <= 8'(OUT_FIFO) - 8'(fifo_used) - 8'(raw_hold);
@@ -422,6 +446,7 @@ module gemm_engine
   always_ff @(posedge clk) begin
     if (!rst_dp)    out_room <= 1'b0;
     else if (tr)    out_room <= !(e_busy && t_cnt >= 5'd4);
+    else if (swiglu) out_room <= sw_room;
     else            out_room <= (32'(fifo_used) + 32'(raw_hold) + (rope ? ROOM_RESERVE_ROPE : ROOM_RESERVE)) <= OUT_FIFO;
   end
 
@@ -439,7 +464,7 @@ module gemm_engine
       bytes_wr <= '0;
     end else begin
       if (beat_valid) bytes_rd <= bytes_rd + 32'd32;
-      if (wr_beat)    bytes_wr <= bytes_wr + ((out16 || raw32 || tr) ? 32'd32 : 32'd16);
+      if (wr_beat)    bytes_wr <= bytes_wr + ((o16 || raw32 || tr) ? 32'd32 : 32'd16);
     end
   end
 endmodule

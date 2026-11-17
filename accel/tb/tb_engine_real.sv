@@ -24,6 +24,8 @@ module tb_engine_real;
   logic [31:0]  bytes_rd, bytes_wr;
   logic [31:0]  out_tstride = 0, head_tiles = 0, head_stride = 0, row0 = 0, rope_cfg = 0, rope_tab_data = 0;
   logic         rope_tab_we = 0;
+  logic [31:0]  sw_m0 = 0, sw_shift = 0, sw_tab_data = 0;
+  logic         sw_tab_we = 0;
 
   logic [31:0]  rd_address, wr_address, wr_byteenable;
   logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest;

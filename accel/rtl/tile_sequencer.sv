@@ -34,6 +34,7 @@ module tile_sequencer #(
   input  logic        op_raw32,       // raw INT32 accumulators: 64-byte output tile rows
   input  logic        op_tr,          // transposed output blocks (OUTFMT 1, 2): 16-bit outputs are not allowed
   input  logic        op_rope,        // RoPE in the epilogue: 16-bit and raw outputs are not allowed
+  input  logic        op_swiglu,      // fused SwiGLU: tiles alternate gate / up, one output tile (INT16) per pair
   input  logic [31:0] out_tstride,    // bytes between consecutive output tiles (0: 16 / 32 / 64 by output type)
   input  logic [31:0] head_tiles,     // output tiles per head (0: no head split)
   input  logic [31:0] head_stride,    // bytes between the first tiles of consecutive heads
@@ -63,6 +64,8 @@ module tile_sequencer #(
   output logic [4:0]  sub_rows_valid,
   output logic [15:0] sub_row0,       // sequence index of row 0 of the subtile
   output logic [1:0]  sub_th,         // output tile within its head (modulo 4)
+  output logic        sub_up,         // SwiGLU: the subtile belongs to an up tile (odd tile), 0 for a gate tile
+  output logic [3:0]  sub_sidx,       // index of the subtile in its panel
   // events from the datapath
   input  logic        row_last_seen,  // the last row of a subtile has come out (one pulse per subtile)
   input  logic        lt_busy,
@@ -88,7 +91,7 @@ module tile_sequencer #(
   state_t state, state_q;
 
   // latched operation
-  logic        in16, out16, op_raw32_q;
+  logic        in16, out16, op_raw32_q, sw_q;
   logic [7:0]  spp;
   logic [31:0] m, n;
   logic [15:0] k, kb, kw, planes_k;     // K, K/2, planes*K words
@@ -180,7 +183,7 @@ module tile_sequencer #(
 
       case (state)
         S_IDLE: if (start) begin
-          in16 <= op_in16; out16 <= op_out16; op_raw32_q <= op_raw32; spp <= sub_per_panel;
+          in16 <= op_in16; out16 <= op_out16; op_raw32_q <= op_raw32; sw_q <= op_swiglu; spp <= sub_per_panel;
           m <= dim_m; n <= dim_n; k <= dim_k[15:0];
           kb <= dim_k[15:1];
           kw <= dim_k[15:0];
@@ -189,7 +192,7 @@ module tile_sequencer #(
           a_addr_cur <= addr_a; w_base <= addr_w; out_base <= addr_out;
           stride16 <= {stride_out[27:0], 4'b0};
           w_tile_bytes   <= {12'b0, dim_k[15:0], 4'b0} + 32'd256;
-          out_tile_bytes <= (out_tstride != 0) ? out_tstride : op_raw32 ? 32'd64 : (op_out16 ? 32'd32 : 32'd16);
+          out_tile_bytes <= (out_tstride != 0) ? out_tstride : op_raw32 ? 32'd64 : ((op_out16 | op_swiglu) ? 32'd32 : 32'd16);
           head_tiles_q   <= head_tiles;
           head_stride_q  <= head_stride;
           row_base       <= row0[15:0];
@@ -199,7 +202,8 @@ module tile_sequencer #(
         S_CHK: begin
           if (m == 0 || n == 0 || n[3:0] != 0 || k == 0 || k[0] ||
               (kb > 16'(W_BEATS)) || spp == 0 ||
-              ((op_tr || op_rope) && (out16 || op_raw32_q))) begin
+              ((op_tr || op_rope) && (out16 || op_raw32_q)) ||
+              (sw_q && (out16 || op_raw32_q || op_tr || op_rope || n[4:0] != 0 || spp > 8'd16))) begin
             next_err <= 8'd2; state <= S_ERR;
           end else begin
             chk_sum <= '0;
@@ -278,6 +282,8 @@ module tile_sequencer #(
           sub_rows_valid <= is_last_sub ? (5'(m - 32'd1) & 5'h0F) + 5'd1 : 5'd16;
           sub_row0       <= row_base + {4'b0, sub_idx, 4'b0};
           sub_th         <= th[1:0];
+          sub_up         <= sw_q & ct[0];
+          sub_sidx       <= sub_idx[3:0];
           sub_start      <= 1'b1;
           fd_start       <= 1'b1;
           state          <= S_RUN;
@@ -302,7 +308,10 @@ module tile_sequencer #(
             w_comp_sel <= w_load_sel;
             w_load_sel <= w_comp_sel;
             ct         <= ct + 1'b1;
-            if (head_tiles_q != 0 && th + 32'd1 == head_tiles_q) begin
+            if (sw_q) begin
+              // gate and up tile share one output tile: it advances after the up tile
+              if (ct[0]) ct_base <= ct_base + out_tile_bytes;
+            end else if (head_tiles_q != 0 && th + 32'd1 == head_tiles_q) begin
               th        <= '0;
               head_base <= head_base + head_stride_q;
               ct_base   <= head_base + head_stride_q;

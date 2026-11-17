@@ -31,6 +31,8 @@ module tb_outfmt;
   logic [31:0]  op = 0, dim_m = 0, dim_n = 0, dim_k = 0, addr_a = 0, addr_w = 0, addr_out = 0, stride_out = 0;
   logic [31:0]  out_tstride = 0, head_tiles = 0, head_stride = 0, row0 = 0, rope_cfg = 0, rope_tab_data = 0;
   logic         rope_tab_we = 0;
+  logic [31:0]  sw_m0 = 0, sw_shift = 0, sw_tab_data = 0;
+  logic         sw_tab_we = 0;
   logic         hw_done, hw_err_valid;
   logic [7:0]   hw_err_code;
   logic [31:0]  bytes_rd, bytes_wr;

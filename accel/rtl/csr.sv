@@ -33,7 +33,12 @@
 //   0x8C ROW0        RW   sequence index (RoPE token) of row 0 of the operation
 //   0x90 ROPE_CFG    RW   [5:0] sh = frac + pre_shift, [13:8] pre_shift
 //   0x94 ROPE_TAB    W    one RoPE table entry: [15:0] value, [25:16] {half, yx[4:0], pair-in-half[3:0]}, [26] 0 cos / 1 sin
-//   0x98 FEATURES    R    [0] OUTFMT writer, [1] RoPE epilogue (a bitstream without them reads 0xDEADBEEF here)
+//   0x98 FEATURES    R    [0] OUTFMT writer, [1] RoPE epilogue, [2] fused SwiGLU (a bitstream without them reads 0xDEADBEEF here)
+//
+// Fused SwiGLU (OP[7] SWIGLU; see swiglu_stage). Reads 0 after reset.
+//   0xA0 SW_M0       RW   [30:0] M0 of the SwiGLU requantisation (manifest swiglu_requant)
+//   0xA4 SW_SHIFT    RW   [5:0] its shift
+//   0xA8 SW_TAB      W    one SiLU table entry: [15:0] value (INT16), [23:16] index (gi + 127, 0..254)
 //
 // Errors: 1 = START while BUSY, otherwise the code given by the engine (hw_err_code).
 module csr #(
@@ -55,9 +60,11 @@ module csr #(
   output logic [31:0] op, dim_m, dim_n, dim_k,
   output logic [31:0] addr_a, addr_w, addr_out, addr_bias, addr_scale,
   output logic [31:0] stride_a, stride_out,
-  output logic [31:0] out_tstride, head_tiles, head_stride, row0, rope_cfg,
+  output logic [31:0] out_tstride, head_tiles, head_stride, row0, rope_cfg, sw_m0, sw_shift,
   output logic        rope_tab_we,
   output logic [31:0] rope_tab_data,
+  output logic        sw_tab_we,
+  output logic [31:0] sw_tab_data,
   // from the engine
   input  logic        hw_done,           // 1-cycle pulse
   input  logic        hw_err_valid,      // 1-cycle pulse
@@ -89,6 +96,7 @@ module csr #(
       stride_a <= '0; stride_out <= '0; scratch <= '0;
       out_tstride <= '0; head_tiles <= '0; head_stride <= '0; row0 <= '0; rope_cfg <= '0;
       rope_tab_we <= 1'b0; rope_tab_data <= '0;
+      sw_m0 <= '0; sw_shift <= '0; sw_tab_we <= 1'b0; sw_tab_data <= '0;
       busy <= 1'b0; done <= 1'b0; error <= 1'b0; irq_en <= 1'b0; err_code <= '0;
       cycles <= '0;
       heartbeat <= '0;
@@ -96,6 +104,7 @@ module csr #(
       start      <= 1'b0;
       soft_reset <= 1'b0;
       rope_tab_we <= 1'b0;
+      sw_tab_we   <= 1'b0;
       heartbeat  <= heartbeat + 1'b1;
       if (busy) cycles <= cycles + 1'b1;
 
@@ -120,6 +129,9 @@ module csr #(
           6'h23: row0        <= merge(row0,        avs_writedata, avs_byteenable);
           6'h24: rope_cfg    <= merge(rope_cfg,    avs_writedata, avs_byteenable);
           6'h25: begin rope_tab_data <= avs_writedata; rope_tab_we <= 1'b1; end
+          6'h28: sw_m0       <= merge(sw_m0,       avs_writedata, avs_byteenable);
+          6'h29: sw_shift    <= merge(sw_shift,    avs_writedata, avs_byteenable);
+          6'h2A: begin sw_tab_data <= avs_writedata; sw_tab_we <= 1'b1; end
           default: ;
         endcase
       end
@@ -192,7 +204,9 @@ module csr #(
         6'h22: avs_readdata <= head_stride;
         6'h23: avs_readdata <= row0;
         6'h24: avs_readdata <= rope_cfg;
-        6'h26: avs_readdata <= 32'h0000_0003;
+        6'h26: avs_readdata <= 32'h0000_0007;
+        6'h28: avs_readdata <= sw_m0;
+        6'h29: avs_readdata <= sw_shift;
         default: avs_readdata <= 32'hDEAD_BEEF;
       endcase
     end

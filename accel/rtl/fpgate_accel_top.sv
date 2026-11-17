@@ -23,6 +23,7 @@ module fpgate_accel_top (
     .start, .soft_reset, .op, .dim_m, .dim_n, .dim_k,
     .addr_a, .addr_w, .addr_out, .addr_bias, .addr_scale, .stride_a, .stride_out,
     .out_tstride(), .head_tiles(), .head_stride(), .row0(), .rope_cfg(), .rope_tab_we(), .rope_tab_data(),
+    .sw_m0(), .sw_shift(), .sw_tab_we(), .sw_tab_data(),
     .hw_done, .hw_err_valid, .hw_err_code,
     .bytes_rd(32'd0), .bytes_wr(32'd0)
   );
