@@ -8,7 +8,14 @@
 //
 // OP: [0] 16-bit input, [1] signed input, [2] 16-bit output, [3] raw INT32 output (no epilogue: each
 //     row of a 16-column tile is 64 bytes, two beats, at ADDR_OUT + row * STRIDE_OUT + tile * 64),
+//     [5:4] OUTFMT (0 row-major, 1 / 2 transposed 16 x 16 byte blocks for Q / K^T, 3 row-major with the tile stride
+//     of OUT_TSTRIDE, for V), [6] ROPE (INT16 epilogue output rotated by RoPE into INT8; token = ROW0 + row),
 //     [15:8] subtiles per panel.
+//   OUTFMT 1 / 2 (INT8 output only): the 16 rows x 16 channels of a (subtile, tile) pair are written as 16 words of
+//   16 bytes (word d = channel d, byte j = row j; rows past M are zero) = 8 beats at ADDR_OUT + subtile * STRIDE_OUT * 16
+//   + tile offset; tiles advance by OUT_TSTRIDE bytes and, every HEAD_TILES tiles, jump to the next head
+//   (HEAD_STRIDE bytes after the first tile of the previous one). With OUTFMT 0 / 3 the tile offset and head jump
+//   apply the same way; rows keep ADDR_OUT + row * STRIDE_OUT.
 module gemm_engine
   import fpgate_pkg::*;
 #(
@@ -29,6 +36,9 @@ module gemm_engine
   input  logic [31:0]  op,
   input  logic [31:0]  dim_m, dim_n, dim_k,
   input  logic [31:0]  addr_a, addr_w, addr_out, stride_out,
+  input  logic [31:0]  out_tstride, head_tiles, head_stride, row0, rope_cfg,
+  input  logic         rope_tab_we,
+  input  logic [31:0]  rope_tab_data,
   output logic         hw_done,
   output logic         hw_err_valid,
   output logic [7:0]   hw_err_code,
@@ -56,6 +66,9 @@ module gemm_engine
   wire insign  = op[1];
   wire out16   = op[2];
   wire raw32   = op[3];
+  wire [1:0] ofmt = op[5:4];
+  wire tr      = (ofmt == 2'd1) || (ofmt == 2'd2);
+  wire rope    = op[6];
   wire [7:0] spp = op[15:8];
 
   // ---- resets ---------------------------------------------------------------
@@ -79,6 +92,8 @@ module gemm_engine
   logic [15:0] fd_a_base, fd_k;
   logic [31:0] sub_addr;
   logic [4:0]  sub_rows_valid;
+  logic [15:0] sub_row0;
+  logic [1:0]  sub_th;
   logic        row_last_seen, lt_busy, wr_idle, progress, ext_err_valid;
   logic [7:0]  ext_err_code;
   logic        seq_busy;
@@ -87,8 +102,9 @@ module gemm_engine
 
   tile_sequencer #(.A_WORDS(A_BEATS * 2), .W_BEATS(W_BEATS), .WD_LIMIT(WD_LIMIT)) u_seq (
     .clk, .rst_n(rst_seq), .start,
-    .op_in16(in16), .op_out16(out16), .op_raw32(raw32), .sub_per_panel(spp),
+    .op_in16(in16), .op_out16(out16), .op_raw32(raw32), .op_tr(tr), .op_rope(rope), .sub_per_panel(spp),
     .dim_m, .dim_n, .dim_k, .addr_a, .addr_w, .addr_out, .stride_out,
+    .out_tstride, .head_tiles, .head_stride, .row0, .sub_row0, .sub_th,
     .rd_cmd_valid, .rd_cmd_ready, .rd_cmd_addr, .rd_cmd_beats, .rd_to_a, .rd_done, .rd_err,
     .w_load_sel, .w_comp_sel,
     .fd_start, .fd_a_base, .fd_k, .fd_two_pass,
@@ -180,6 +196,8 @@ module gemm_engine
   logic signed [COLS-1:0][15:0] row_data;
   logic signed [COLS-1:0][31:0] row_raw;
   logic                         out_room;
+  logic                         lt_row_valid, lt_row_last, rp_row_valid, rp_row_last, rp_busy;
+  logic signed [COLS-1:0][15:0] lt_row_data, rp_row_data;
 
   // the tag of a subtile is the weight buffer it was computed from: its rows need that
   // buffer's epilogue constants, even after the compute side has swapped buffers
@@ -187,9 +205,21 @@ module gemm_engine
     .clk, .rst_n(rst_dp),
     .in_valid, .in_first, .in_shift, .in_last, .in_tag(w_comp_sel), .a_vec, .w_vec,
     .last_ok, .drain_tag(ep_sel),
-    .bias, .m0, .shift, .out16, .raw32, .out_room,
-    .busy(lt_busy), .row_valid, .row_data, .row_raw, .row_last
+    .bias, .m0, .shift, .out16(out16 | rope), .raw32, .out_room,
+    .busy(lt_busy), .row_valid(lt_row_valid), .row_data(lt_row_data), .row_raw, .row_last(lt_row_last)
   );
+
+  // RoPE between the epilogue and the output rows (INT16 rows in, INT8 rows out); bypassed when ROPE = 0
+  rope_unit #(.COLS(COLS)) u_rope (
+    .clk, .rst_n(rst_dp), .en(rope), .sh(rope_cfg[5:0]), .pre(rope_cfg[13:8]),
+    .tab_we(rope_tab_we), .tab_data(rope_tab_data),
+    .ctx_push(sub_start), .ctx_row0(sub_row0), .ctx_th(sub_th),
+    .in_valid(lt_row_valid), .in_data(lt_row_data), .in_last(lt_row_last),
+    .out_valid(rp_row_valid), .out_data(rp_row_data), .out_last(rp_row_last), .busy(rp_busy)
+  );
+  assign row_valid = rope ? rp_row_valid : lt_row_valid;
+  assign row_data  = rope ? rp_row_data  : lt_row_data;
+  assign row_last  = rope ? rp_row_last  : lt_row_last;
 
   // ---- output rows: address, byte enables, FIFO ----------------------------------------
   // Two subtile contexts: the one whose rows are coming out (cur) and the next one,
@@ -257,7 +287,7 @@ module gemm_engine
   end
 
   logic         wr_in_valid, wr_in_ready, wr_busy, wr_beat, wr_err, wr_win_err;
-  wire push = row_valid && (rcnt < rows_valid_q);
+  wire push = row_valid && (rcnt < rows_valid_q) && !tr;
 
   localparam int FW = $clog2(OUT_FIFO);
   logic [319:0] fifo_mem [OUT_FIFO];
@@ -278,8 +308,55 @@ module gemm_engine
     end
   end
 
+  // ---- transposer (OUTFMT 1, 2) ------------------------------------------------------------------
+  // T collects the 16 rows of a subtile: word d (16 bytes) shifts in byte d of every row, so after 16 rows byte j
+  // of word d is row j. When the subtile is complete (t_full) the words move to E, which shifts out two words
+  // (one 32-byte beat) per cycle into the output FIFO while T takes the next subtile.
+  // Rows past M enter as zero. t_cnt counts the rows in T; the epilogue is stopped (out_room) while E is busy and T
+  // is filling up, so T never completes while E is still occupied.
+  logic [15:0][127:0] t_words, e_words;
+  logic [4:0]         t_cnt;
+  logic               t_full;
+  logic [31:0]        t_addr, e_addr;
+  logic [3:0]         e_cnt;
+  logic               tr_ovf;
+  wire  tr_row  = row_valid && tr;
+  wire  tr_push = (e_cnt != 4'd0) && !fifo_full;
+  wire  e_busy  = (e_cnt != 4'd0) || t_full;
+
   always_ff @(posedge clk) begin
-    overflow <= 1'b0;
+    tr_ovf <= 1'b0;
+    if (!rst_dp) begin
+      t_cnt  <= '0;
+      t_full <= 1'b0;
+      e_cnt  <= '0;
+    end else begin
+      if (tr_row) begin
+        for (int d = 0; d < COLS; d++)
+          t_words[d] <= {(rcnt < rows_valid_q) ? row_data[d][7:0] : 8'h00, t_words[d][127:8]};
+        if (rcnt == 5'd0) t_addr <= cur_addr;
+        t_cnt <= t_cnt + 1'b1;
+        if (t_full) tr_ovf <= 1'b1;
+        if (row_last) t_full <= 1'b1;
+      end
+      if (t_full && e_cnt == 4'd0) begin
+        e_words <= t_words;
+        e_addr  <= t_addr;
+        e_cnt   <= 4'd8;
+        t_full  <= 1'b0;
+        t_cnt   <= '0;
+      end else if (tr_push) begin
+        for (int d = 0; d < COLS - 2; d++) e_words[d] <= e_words[d + 2];
+        e_words[COLS-2] <= '0;
+        e_words[COLS-1] <= '0;
+        e_addr <= e_addr + 32'd32;
+        e_cnt  <= e_cnt - 1'b1;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    overflow <= tr_ovf;
     if (!rst_dp) begin
       wp <= '0;
       rp <= '0;
@@ -300,6 +377,9 @@ module gemm_engine
           fifo_mem[wp[FW-1:0]] <= raw_hold_entry;
           wp <= wp + 1'b1;
         end
+      end else if (tr_push) begin
+        fifo_mem[wp[FW-1:0]] <= {32'hFFFF_FFFF, {e_addr[31:5], 5'b0}, e_words[1], e_words[0]};
+        wp <= wp + 1'b1;
       end
       if (wr_in_valid && wr_in_ready) rp <= rp + 1'b1;
     end
@@ -318,7 +398,7 @@ module gemm_engine
     .m_byteenable(wr_byteenable), .m_burstcount(wr_burstcount), .m_waitrequest(wr_waitrequest)
   );
 
-  assign wr_idle = fifo_empty && !wr_busy;
+  assign wr_idle = fifo_empty && !wr_busy && !e_busy;
 
   // free FIFO entries (registered; counts the raw32 half row that is still to be written)
   logic [FW:0] fifo_used;
@@ -333,10 +413,16 @@ module gemm_engine
   // requant lanes (latency RQ_LATENCY + 2 at one row per COLS/LANES = 4 cycles), or
   // one raw row (2 entries). Add the row being taken (up to 2 entries) and one cycle of
   // staleness of this register (another row, up to 2 entries): 7 entries; 8 kept free.
+  // With ROPE the rows spend about 10 more cycles in rope_unit (up to 3 more rows in flight): 12 kept free.
+  // With the transposer there are no per-row pushes: the rows go into T, and E pushes only when the FIFO has room;
+  // the epilogue stops while E is busy and T already holds 4 rows (at most 8 rows are in flight beyond that point,
+  // so T cannot complete before E is free).
   localparam int ROOM_RESERVE = 8;
+  localparam int ROOM_RESERVE_ROPE = 12;
   always_ff @(posedge clk) begin
-    if (!rst_dp) out_room <= 1'b0;
-    else         out_room <= (32'(fifo_used) + 32'(raw_hold) + ROOM_RESERVE) <= OUT_FIFO;
+    if (!rst_dp)    out_room <= 1'b0;
+    else if (tr)    out_room <= !(e_busy && t_cnt >= 5'd4);
+    else            out_room <= (32'(fifo_used) + 32'(raw_hold) + (rope ? ROOM_RESERVE_ROPE : ROOM_RESERVE)) <= OUT_FIFO;
   end
 
   // ---- errors, progress, counters ----------------------------------------------------------
@@ -345,7 +431,7 @@ module gemm_engine
     ext_err_valid = wr_err || rd_win_err || wr_win_err || overflow;
     ext_err_code  = wr_err ? 8'd4 : (rd_win_err || wr_win_err) ? 8'd7 : 8'd5;
   end
-  assign progress = beat_valid || wr_beat || in_valid || push;
+  assign progress = beat_valid || wr_beat || in_valid || push || row_valid || tr_push;
 
   always_ff @(posedge clk) begin
     if (!rst_n || start) begin
@@ -353,7 +439,7 @@ module gemm_engine
       bytes_wr <= '0;
     end else begin
       if (beat_valid) bytes_rd <= bytes_rd + 32'd32;
-      if (wr_beat)    bytes_wr <= bytes_wr + ((out16 || raw32) ? 32'd32 : 32'd16);
+      if (wr_beat)    bytes_wr <= bytes_wr + ((out16 || raw32 || tr) ? 32'd32 : 32'd16);
     end
   end
 endmodule

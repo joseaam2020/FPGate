@@ -23,6 +23,8 @@ module tb_gemm_engine;
   logic         hw_done, hw_err_valid;
   logic [7:0]   hw_err_code;
   logic [31:0]  bytes_rd, bytes_wr;
+  logic [31:0]  out_tstride = 0, head_tiles = 0, head_stride = 0, row0 = 0, rope_cfg = 0, rope_tab_data = 0;
+  logic         rope_tab_we = 0;
 
   logic [31:0]  rd_address, wr_address, wr_byteenable;
   logic         rd_read, rd_waitrequest, rd_readdatavalid, wr_write, wr_waitrequest, hang_reads;

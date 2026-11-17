@@ -81,6 +81,8 @@ module fpgate_accel_core #(
   logic [31:0] op, dim_m, dim_n, dim_k, addr_a, addr_w, addr_out, addr_bias, addr_scale, stride_a, stride_out;
   logic [31:0] bytes_rd, bytes_wr;
   logic [31:0] eng_readdata;
+  logic [31:0] out_tstride, head_tiles, head_stride, row0, rope_cfg, rope_tab_data;
+  logic        rope_tab_we;
 
   csr u_csr (
     .clk, .rst_n,
@@ -88,12 +90,14 @@ module fpgate_accel_core #(
     .avs_read(avs_read && !sel_sm), .avs_readdata(eng_readdata), .irq,
     .start, .soft_reset, .op, .dim_m, .dim_n, .dim_k,
     .addr_a, .addr_w, .addr_out, .addr_bias, .addr_scale, .stride_a, .stride_out,
+    .out_tstride, .head_tiles, .head_stride, .row0, .rope_cfg, .rope_tab_we, .rope_tab_data,
     .hw_done, .hw_err_valid, .hw_err_code, .bytes_rd, .bytes_wr
   );
 
   gemm_engine #(.A_BEATS(A_BEATS), .W_BEATS(W_BEATS), .LANES(LANES), .ADDR_LO(ADDR_LO), .ADDR_HI(ADDR_HI)) u_engine (
     .clk, .rst_n, .start, .soft_reset,
     .op, .dim_m, .dim_n, .dim_k, .addr_a, .addr_w, .addr_out, .stride_out,
+    .out_tstride, .head_tiles, .head_stride, .row0, .rope_cfg, .rope_tab_we, .rope_tab_data,
     .hw_done, .hw_err_valid, .hw_err_code, .bytes_rd, .bytes_wr,
     .rd_address, .rd_read, .rd_burstcount, .rd_waitrequest, .rd_readdata, .rd_readdatavalid,
     .wr_address, .wr_write, .wr_writedata, .wr_byteenable, .wr_burstcount, .wr_waitrequest

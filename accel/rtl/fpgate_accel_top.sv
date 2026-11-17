@@ -22,6 +22,7 @@ module fpgate_accel_top (
     .avs_address, .avs_write, .avs_writedata, .avs_byteenable, .avs_read, .avs_readdata, .irq,
     .start, .soft_reset, .op, .dim_m, .dim_n, .dim_k,
     .addr_a, .addr_w, .addr_out, .addr_bias, .addr_scale, .stride_a, .stride_out,
+    .out_tstride(), .head_tiles(), .head_stride(), .row0(), .rope_cfg(), .rope_tab_we(), .rope_tab_data(),
     .hw_done, .hw_err_valid, .hw_err_code,
     .bytes_rd(32'd0), .bytes_wr(32'd0)
   );

@@ -32,6 +32,12 @@ module tile_sequencer #(
   input  logic        op_in16,
   input  logic        op_out16,
   input  logic        op_raw32,       // raw INT32 accumulators: 64-byte output tile rows
+  input  logic        op_tr,          // transposed output blocks (OUTFMT 1, 2): 16-bit outputs are not allowed
+  input  logic        op_rope,        // RoPE in the epilogue: 16-bit and raw outputs are not allowed
+  input  logic [31:0] out_tstride,    // bytes between consecutive output tiles (0: 16 / 32 / 64 by output type)
+  input  logic [31:0] head_tiles,     // output tiles per head (0: no head split)
+  input  logic [31:0] head_stride,    // bytes between the first tiles of consecutive heads
+  input  logic [31:0] row0,           // sequence index of row 0 of the operation (RoPE token)
   input  logic [7:0]  sub_per_panel,
   input  logic [31:0] dim_m, dim_n, dim_k,
   input  logic [31:0] addr_a, addr_w, addr_out, stride_out,
@@ -55,6 +61,8 @@ module tile_sequencer #(
   output logic        sub_start,
   output logic [31:0] sub_addr,
   output logic [4:0]  sub_rows_valid,
+  output logic [15:0] sub_row0,       // sequence index of row 0 of the subtile
+  output logic [1:0]  sub_th,         // output tile within its head (modulo 4)
   // events from the datapath
   input  logic        row_last_seen,  // the last row of a subtile has come out (one pulse per subtile)
   input  logic        lt_busy,
@@ -86,6 +94,8 @@ module tile_sequencer #(
   logic [15:0] k, kb, kw, planes_k;     // K, K/2, planes*K words
   logic [15:0] planes_kb;               // planes*K/2 beats per subtile
   logic [31:0] a_addr_cur, w_base, out_base, stride16, w_tile_bytes, out_tile_bytes;
+  logic [31:0] head_tiles_q, head_stride_q, th, head_base;
+  logic [15:0] row_base;
 
   // loop state
   logic [31:0] subs_left, nt, ct;
@@ -179,13 +189,17 @@ module tile_sequencer #(
           a_addr_cur <= addr_a; w_base <= addr_w; out_base <= addr_out;
           stride16 <= {stride_out[27:0], 4'b0};
           w_tile_bytes   <= {12'b0, dim_k[15:0], 4'b0} + 32'd256;
-          out_tile_bytes <= op_raw32 ? 32'd64 : (op_out16 ? 32'd32 : 32'd16);
+          out_tile_bytes <= (out_tstride != 0) ? out_tstride : op_raw32 ? 32'd64 : (op_out16 ? 32'd32 : 32'd16);
+          head_tiles_q   <= head_tiles;
+          head_stride_q  <= head_stride;
+          row_base       <= row0[15:0];
           state <= S_CHK;
         end
 
         S_CHK: begin
           if (m == 0 || n == 0 || n[3:0] != 0 || k == 0 || k[0] ||
-              (kb > 16'(W_BEATS)) || spp == 0) begin
+              (kb > 16'(W_BEATS)) || spp == 0 ||
+              ((op_tr || op_rope) && (out16 || op_raw32_q))) begin
             next_err <= 8'd2; state <= S_ERR;
           end else begin
             chk_sum <= '0;
@@ -240,6 +254,8 @@ module tile_sequencer #(
           w_comp_sel  <= 1'b0;
           w_load_sel  <= 1'b1;
           ct          <= '0;
+          th          <= '0;
+          head_base   <= panel_out_base;
           ct_base     <= panel_out_base;
           w_next_addr <= w_base + w_tile_bytes;
           state       <= S_TSTART;
@@ -260,6 +276,8 @@ module tile_sequencer #(
         // the output side keeps the address of two subtiles at most
         S_SSTART: if (!ctx_full) begin
           sub_rows_valid <= is_last_sub ? (5'(m - 32'd1) & 5'h0F) + 5'd1 : 5'd16;
+          sub_row0       <= row_base + {4'b0, sub_idx, 4'b0};
+          sub_th         <= th[1:0];
           sub_start      <= 1'b1;
           fd_start       <= 1'b1;
           state          <= S_RUN;
@@ -284,13 +302,21 @@ module tile_sequencer #(
             w_comp_sel <= w_load_sel;
             w_load_sel <= w_comp_sel;
             ct         <= ct + 1'b1;
-            ct_base    <= ct_base + out_tile_bytes;
+            if (head_tiles_q != 0 && th + 32'd1 == head_tiles_q) begin
+              th        <= '0;
+              head_base <= head_base + head_stride_q;
+              ct_base   <= head_base + head_stride_q;
+            end else begin
+              th        <= th + 1'b1;
+              ct_base   <= ct_base + out_tile_bytes;
+            end
             state      <= (ct + 32'd1 < nt) ? S_TSTART : S_PEND;
           end
         end
 
         S_PEND: begin
           subs_left      <= subs_left - 32'(panel_sub);
+          row_base       <= row_base + {4'b0, panel_sub, 4'b0};
           panel_out_base <= panel_out_base + panel_acc;
           state          <= (subs_left == 32'(panel_sub)) ? S_FLUSH : S_PSTART;
         end
