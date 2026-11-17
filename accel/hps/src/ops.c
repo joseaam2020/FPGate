@@ -62,8 +62,14 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
         const float32x4_t d = vabsq_f32(vsubq_f32(t, r));
         /* tie candidate: |d - 0.5| < 4e-7*|t| + 1e-6 (separate mul and add, no FMA) */
         const float32x4_t lim = vaddq_f32(vmulq_f32(vk, at), ve);
-        const uint32x4_t tie = vcltq_f32(vabsq_f32(vsubq_f32(d, vhalf)), lim);
-        const uint32x4_t ok = vcltq_f32(at, vbig); /* false for NaN as well */
+        /* The comparisons are done on the bit patterns as unsigned integers. gcc lowers vcltq_f32 on
+         * ARMv7 to 4 scalar vcmpe + vmrs (NEON compares are not IEEE without -ffast-math), which made
+         * this loop ~30 ns per element on the A9. Every operand here is >= +0 (vabs, or lim >= 1e-6),
+         * and for non-negative floats the unsigned order of the bits is the IEEE order, denormals
+         * included. NaN: its pattern is above +inf, so "at < big" is false (as before, lane -> scalar). */
+        const uint32x4_t tie = vcltq_u32(vreinterpretq_u32_f32(vabsq_f32(vsubq_f32(d, vhalf))),
+                                         vreinterpretq_u32_f32(lim));
+        const uint32x4_t ok = vcltq_u32(vreinterpretq_u32_f32(at), vreinterpretq_u32_f32(vbig));
         int32x4_t v = vcvtq_s32_f32(r);
         v = vminq_s32(vmaxq_s32(v, vnqm), vqm);
         const uint32x4_t bad = vmvnq_u32(vandq_u32(ok, vmvnq_u32(tie)));
