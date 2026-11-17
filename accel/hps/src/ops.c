@@ -53,13 +53,15 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
     const float32x4_t vbig = vdupq_n_f32(4194304.0f);
     const int32x4_t vqm = vdupq_n_s32(qm), vnqm = vdupq_n_s32(-qm);
     /* Blocks of 64: the "any lane needs the scalar code" test moves a NEON value to an ARM register,
-     * which stalls the A9 for ~20 cycles, so it is done once per block on the OR of the 16 masks. A
-     * block with a doubtful lane is recomputed whole with quant_one; on the other lanes NEON and
-     * quant_one give the same value, so the result does not depend on the block size. */
+     * which stalls the A9 for ~20 cycles, so it is done once per block on the OR of the 16 masks. The
+     * masks are also stored (a NEON store does not stall), and in a block with doubtful lanes only
+     * those lanes are recomputed with quant_one: with 16-bit outputs ~1 % of the lanes are doubtful,
+     * so about half the blocks have one. On the other lanes NEON and quant_one give the same value. */
     const ptrdiff_t nv = nn & ~(ptrdiff_t)63;
 #pragma omp parallel for schedule(static) if (n > 4096)
     for (ptrdiff_t b = 0; b < nv; b += 64) {
       uint32x4_t any = vdupq_n_u32(0);
+      uint32_t mk[64] __attribute__((aligned(16)));
       for (ptrdiff_t i = b; i < b + 64; i += 4) {
         const float32x4_t xv = vld1q_f32(x + i);
         const float32x4_t t = vmulq_f32(xv, vinv);
@@ -78,7 +80,9 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
         const uint32x4_t ok = vcltq_u32(vreinterpretq_u32_f32(at), vreinterpretq_u32_f32(vbig));
         int32x4_t v = vcvtq_s32_f32(r);
         v = vminq_s32(vmaxq_s32(v, vnqm), vqm);
-        any = vorrq_u32(any, vmvnq_u32(vandq_u32(ok, vmvnq_u32(tie))));
+        const uint32x4_t bad = vmvnq_u32(vandq_u32(ok, vmvnq_u32(tie)));
+        vst1q_u32(mk + (i - b), bad);
+        any = vorrq_u32(any, bad);
         const int16x4_t v16 = vmovn_s32(v);
         if (bits == 8)
             vst1_lane_u32((uint32_t *)((int8_t *)q + i), vreinterpret_u32_s8(vqmovn_s16(vcombine_s16(v16, v16))), 0);
@@ -88,6 +92,8 @@ void quantize_f32(const float *x, size_t n, double scale, int bits, void *q)
       const uint32x2_t b2 = vorr_u32(vget_low_u32(any), vget_high_u32(any));
       if (vget_lane_u32(vpmax_u32(b2, b2), 0)) {
           for (ptrdiff_t i = b; i < b + 64; i++) {
+              if (!mk[i - b])
+                  continue;
               const int v = quant_one(x[i], sc, inv, qm);
               if (bits == 8)
                   ((int8_t *)q)[i] = (int8_t)v;
