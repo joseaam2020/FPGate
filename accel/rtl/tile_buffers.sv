@@ -79,6 +79,11 @@ module tile_buffers
   logic [255:0] a_q;
   logic         a_half;
 
+  // The write address is also replicated per group of 8 slices (one copy per 8 banks), a stage before the per-slice copy.
+  localparam int A_GRP = 4;
+  (* preserve, dont_merge *) logic [$clog2(A_BEATS)-1:0] a_waddr_g [A_GRP];
+  always_ff @(posedge clk) for (int g = 0; g < A_GRP; g++) a_waddr_g[g] <= a_waddr_p[WR_PIPE-3];
+
   genvar gs;
   generate
     for (gs = 0; gs < A_SLICES; gs++) begin : g_a
@@ -88,7 +93,7 @@ module tile_buffers
       logic [7:0] mem [A_BEATS];
       always_ff @(posedge clk) begin
         we_r <= a_we_p[WR_PIPE-2];
-        wa_r <= a_waddr_p[WR_PIPE-2];
+        wa_r <= a_waddr_g[gs / (A_SLICES / A_GRP)];   // a_waddr_g is stage WR_PIPE-2 of the address
         wd_r <= a_wdata_p[WR_PIPE-2][8*gs +: 8];
         if (we_r) mem[wa_r] <= wd_r;
         a_q[8*gs +: 8] <= mem[a_raddr[$clog2(A_BEATS):1]];
