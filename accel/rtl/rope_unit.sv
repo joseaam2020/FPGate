@@ -22,7 +22,8 @@
 // Table load: tab_we with tab_data = {5'b0, sin, pidx[9:0], value[15:0]}, pidx = {half, yx, pair-in-half}.
 // The sideband of a subtile (first token of its row 0, tile-in-head) is pushed with ctx_push when the
 // sequencer starts the subtile; the unit takes it back when the subtile's last row has been processed.
-module rope_unit #(
+// Multipliers in logic: the DSP blocks are all taken by the GEMM array and the epilogue.
+(* multstyle = "logic" *) module rope_unit #(
   parameter int COLS = 16
 )(
   input  logic                          clk,

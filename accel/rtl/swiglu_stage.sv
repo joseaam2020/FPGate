@@ -15,7 +15,8 @@
 //
 // The subtile context (gate or up, subtile index in the panel) comes with sub_start from the sequencer and is
 // attached to the rows of that subtile as they come in.
-module swiglu_stage
+// Multipliers in logic: the DSP blocks are all taken by the GEMM array and the epilogue.
+(* multstyle = "logic" *) module swiglu_stage
   import fpgate_pkg::*;
 #(
   parameter int COLS   = 16,

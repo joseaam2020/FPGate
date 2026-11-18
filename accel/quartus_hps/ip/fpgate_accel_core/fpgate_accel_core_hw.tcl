@@ -17,7 +17,7 @@ set_fileset_property QUARTUS_SYNTH TOP_LEVEL fpgate_accel_core
 set_fileset_property QUARTUS_SYNTH ENABLE_RELATIVE_INCLUDE_PATHS false
 # the package first: later files import it
 foreach f {fpgate_pkg pe gemm_array requant_lane epilogue_row linear_tile tile_buffers
-           operand_feeder tile_sequencer dma_rd dma_wr mem_arbiter gemm_engine csr csr_sm
+           operand_feeder tile_sequencer dma_rd dma_wr mem_arbiter rope_unit swiglu_lane swiglu_stage gemm_engine csr csr_sm
            softmax_idx_lane softmax_p3_lane softmax_exp_rom softmax_recip_rom softmax_rowram attn_softmax fpgate_accel_core} {
   if {$f eq "fpgate_accel_core"} {
     add_fileset_file $f.sv SYSTEM_VERILOG PATH ../../../rtl/$f.sv TOP_LEVEL_FILE
