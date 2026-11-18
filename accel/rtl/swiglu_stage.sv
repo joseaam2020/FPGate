@@ -51,7 +51,7 @@
 );
   localparam int NB  = COLS / LANES;                 // beats per row
   localparam int BW  = (NB > 1) ? $clog2(NB) : 1;
-  localparam int LAT = 4 + RQ_LATENCY;               // swiglu_lane latency
+  localparam int LAT = 5 + RQ_LATENCY;               // swiglu_lane latency (requant_lane with EXTRA_STAGE)
   localparam int FW  = $clog2(FIFO_D);
   localparam int AW  = $clog2(SUBS) + 4;
 

@@ -9,7 +9,11 @@
 // DSP 18x18 multiplier) that are summed in registered steps, instead of leaving the
 // decomposition to the tools: this is what makes 150 MHz reachable.
 (* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)
-module requant_lane (
+module requant_lane #(
+  // 1: one more stage inside the multiplier (m split in two byte halves, partial sums one cycle later): latency +1.
+  // For instances whose multipliers are built from logic (swiglu_lane); the epilogue lanes keep 0.
+  parameter bit EXTRA_STAGE = 1'b0
+) (
   input  logic                clk,
   input  logic                rst_n,
   input  logic                in_valid,
@@ -52,6 +56,22 @@ module requant_lane (
   logic signed [63:0] shr_6;
   logic               o16_6, v_6;
 
+  // EXTRA_STAGE only: split products (stage 2) and their sums (stage 2x)
+  logic signed [25:0] q_hh_lo, q_hl_lo, q_lh_lo, q_ll_lo;
+  logic signed [25:0] q_hh_hi, q_hl_hi, q_lh_hi, q_ll_hi;
+  logic signed [31:0] p_hh_x;
+  logic signed [32:0] p_hl_x, p_lh_x;
+  logic signed [33:0] p_ll_x;
+  logic        [5:0]  sh_2x;
+  logic               o16_2x, v_2x;
+  wire signed [31:0] p_hh_s = EXTRA_STAGE ? p_hh_x : p_hh_2;
+  wire signed [32:0] p_hl_s = EXTRA_STAGE ? p_hl_x : p_hl_2;
+  wire signed [32:0] p_lh_s = EXTRA_STAGE ? p_lh_x : p_lh_2;
+  wire signed [33:0] p_ll_s = EXTRA_STAGE ? p_ll_x : p_ll_2;
+  wire        [5:0]  sh_s   = EXTRA_STAGE ? sh_2x : sh_2;
+  wire               o16_s  = EXTRA_STAGE ? o16_2x : o16_2;
+  wire               v_s    = EXTRA_STAGE ? v_2x : v_2;
+
   wire signed [15:0] ah = accb_1[31:16];
   wire signed [16:0] al = {1'b0, accb_1[15:0]};
   wire signed [15:0] mh = {1'b0, m0_1[30:16]};
@@ -63,18 +83,34 @@ module requant_lane (
     sh_1   <= shift;
     o16_1  <= out16;
 
-    p_hh_2 <= ah * mh;
-    p_hl_2 <= ah * ml;
-    p_lh_2 <= al * mh;
-    p_ll_2 <= al * ml;
     sh_2   <= sh_1;
     o16_2  <= o16_1;
+    if (EXTRA_STAGE) begin
+      // each product = x * m_lo (m[7:0] unsigned) + (x * m_hi) << 8, summed in the next stage
+      q_hh_lo <= ah * signed'({1'b0, mh[7:0]});   q_hh_hi <= ah * signed'({1'b0, mh[14:8]});
+      q_hl_lo <= ah * signed'({1'b0, ml[7:0]});   q_hl_hi <= ah * signed'({1'b0, ml[15:8]});
+      q_lh_lo <= al * signed'({1'b0, mh[7:0]});   q_lh_hi <= al * signed'({1'b0, mh[14:8]});
+      q_ll_lo <= al * signed'({1'b0, ml[7:0]});   q_ll_hi <= al * signed'({1'b0, ml[15:8]});
+      sh_2x   <= sh_2;
+      o16_2x  <= o16_2;
+    end else begin
+      p_hh_2 <= ah * mh;
+      p_hl_2 <= ah * ml;
+      p_lh_2 <= al * mh;
+      p_ll_2 <= al * ml;
+    end
+    if (EXTRA_STAGE) begin
+      p_hh_x <= 32'(q_hh_lo) + (32'(q_hh_hi) <<< 8);
+      p_hl_x <= 33'(q_hl_lo) + (33'(q_hl_hi) <<< 8);
+      p_lh_x <= 33'(q_lh_lo) + (33'(q_lh_hi) <<< 8);
+      p_ll_x <= 34'(q_ll_lo) + (34'(q_ll_hi) <<< 8);
+    end
 
-    mid_3  <= 34'(p_hl_2) + 34'(p_lh_2);
-    p_ll_3 <= p_ll_2;
-    p_hh_3 <= p_hh_2;
-    sh_3   <= sh_2;
-    o16_3  <= o16_2;
+    mid_3  <= 34'(p_hl_s) + 34'(p_lh_s);
+    p_ll_3 <= p_ll_s;
+    p_hh_3 <= p_hh_s;
+    sh_3   <= sh_s;
+    o16_3  <= o16_s;
 
     lo_4   <= (64'(mid_3) <<< 16) + 64'(p_ll_3);
     hi_4   <= (64'(p_hh_3) <<< 32) + (64'sd1 <<< (sh_3 - 6'd1));
@@ -101,9 +137,9 @@ module requant_lane (
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      v_1 <= 1'b0; v_2 <= 1'b0; v_3 <= 1'b0; v_4 <= 1'b0; v_5 <= 1'b0; v_6 <= 1'b0; out_valid <= 1'b0;
+      v_1 <= 1'b0; v_2 <= 1'b0; v_2x <= 1'b0; v_3 <= 1'b0; v_4 <= 1'b0; v_5 <= 1'b0; v_6 <= 1'b0; out_valid <= 1'b0;
     end else begin
-      v_1 <= in_valid; v_2 <= v_1; v_3 <= v_2; v_4 <= v_3; v_5 <= v_4; v_6 <= v_5; out_valid <= v_6;
+      v_1 <= in_valid; v_2 <= v_1; v_2x <= v_2; v_3 <= v_s; v_4 <= v_3; v_5 <= v_4; v_6 <= v_5; out_valid <= v_6;
     end
   end
 endmodule

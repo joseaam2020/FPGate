@@ -4,7 +4,7 @@
 // gi/ui are the already requantized INT8 outputs of fc1g/fc1x. M0/shift are scalars
 // of the block (manifest: swiglu_requant). The table is loaded through the write
 // port before the block starts. The final requantization reuses requant_lane.
-// Latency: 4 + requant_lane (7) cycles, one value per cycle.
+// Latency: 4 + requant_lane (7) + 1 (EXTRA_STAGE) cycles, one value per cycle.
 (* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)
 module swiglu_lane (
   input  logic                clk,
@@ -79,7 +79,7 @@ module swiglu_lane (
     end
   end
 
-  requant_lane u_rq (
+  requant_lane #(.EXTRA_STAGE(1'b1)) u_rq (
     .clk, .rst_n,
     .in_valid(v_4),
     .acc(32'(prod_4)),
