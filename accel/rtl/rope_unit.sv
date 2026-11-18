@@ -223,31 +223,43 @@
     bc_d   <= bc_c;
   end
 
-  // ---- stage E: shift, saturate, collect ---------------------------------------------------------
-  function automatic logic signed [15:0] sat8(input logic signed [33:0] v, input logic [5:0] s);
-    logic signed [33:0] r;
-    r = v >>> s;
+  // ---- stage S: shift ----------------------------------------------------------------------------
+  logic signed [33:0] r0 [2], r1 [2];
+  logic        v_s, last_s;
+  logic [1:0]  bc_s;
+  always_ff @(posedge clk) begin
+    for (int l = 0; l < 2; l++) begin
+      r0[l] <= v0[l] >>> sh_r;
+      r1[l] <= v1[l] >>> sh_r;
+    end
+    v_s    <= rst_n & en & v_d;
+    last_s <= last_d;
+    bc_s   <= bc_d;
+  end
+
+  // ---- stage E: saturate, collect ----------------------------------------------------------------
+  function automatic logic signed [15:0] sat8(input logic signed [33:0] r);
     if (r > 34'sd127)       return 16'sd127;
     else if (r < -34'sd127) return -16'sd127;
     else                    return 16'(r);
   endfunction
 
   logic signed [COLS-1:0][15:0] acc_row;
-  assign busy = active || v_a || v_b || v_c0 || v_c1 || v_c || v_d;
+  assign busy = active || v_a || v_b || v_c0 || v_c1 || v_c || v_d || v_s;
   always_ff @(posedge clk) begin
     out_valid <= 1'b0;
-    if (v_d) begin
+    if (v_s) begin
       logic signed [COLS-1:0][15:0] nxt;
       nxt = acc_row;
       for (int l = 0; l < 2; l++) begin
-        nxt[{bc_d, 2'b00} + 4'(2*l)]     = sat8(v0[l], sh_r);
-        nxt[{bc_d, 2'b00} + 4'(2*l + 1)] = sat8(v1[l], sh_r);
+        nxt[{bc_s, 2'b00} + 4'(2*l)]     = sat8(r0[l]);
+        nxt[{bc_s, 2'b00} + 4'(2*l + 1)] = sat8(r1[l]);
       end
       acc_row <= nxt;
-      if (bc_d == 2'd3) begin
+      if (bc_s == 2'd3) begin
         out_data  <= nxt;
         out_valid <= rst_n & en;
-        out_last  <= last_d;
+        out_last  <= last_s;
       end
     end
   end

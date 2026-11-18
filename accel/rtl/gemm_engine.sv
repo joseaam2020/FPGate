@@ -437,12 +437,12 @@ module gemm_engine
   // requant lanes (latency RQ_LATENCY + 2 at one row per COLS/LANES = 4 cycles), or
   // one raw row (2 entries). Add the row being taken (up to 2 entries) and one cycle of
   // staleness of this register (another row, up to 2 entries): 7 entries; 8 kept free.
-  // With ROPE the rows spend about 10 more cycles in rope_unit (up to 3 more rows in flight, 2 cycles more for the split products: 14 kept free.
+  // With ROPE the rows spend about 10 more cycles in rope_unit (up to 3 more rows in flight, 2 cycles more for the split products, 1 more for the shift stage: 16 kept free.
   // With the transposer there are no per-row pushes: the rows go into T, and E pushes only when the FIFO has room;
   // the epilogue stops while E is busy and T already holds 4 rows (at most 8 rows are in flight beyond that point,
   // so T cannot complete before E is free).
   localparam int ROOM_RESERVE = 8;
-  localparam int ROOM_RESERVE_ROPE = 14;
+  localparam int ROOM_RESERVE_ROPE = 16;
   always_ff @(posedge clk) begin
     if (!rst_dp)    out_room <= 1'b0;
     else if (tr)    out_room <= !(e_busy && t_cnt >= 5'd4);
