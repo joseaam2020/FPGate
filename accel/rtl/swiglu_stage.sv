@@ -16,7 +16,7 @@
 // The subtile context (gate or up, subtile index in the panel) comes with sub_start from the sequencer and is
 // attached to the rows of that subtile as they come in.
 // Multipliers in logic: the DSP blocks are all taken by the GEMM array and the epilogue.
-(* multstyle = "logic" *) module swiglu_stage
+(* multstyle = "logic", altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *) module swiglu_stage
   import fpgate_pkg::*;
 #(
   parameter int COLS   = 16,
@@ -51,7 +51,7 @@
 );
   localparam int NB  = COLS / LANES;                 // beats per row
   localparam int BW  = (NB > 1) ? $clog2(NB) : 1;
-  localparam int LAT = 3 + RQ_LATENCY;               // swiglu_lane latency
+  localparam int LAT = 4 + RQ_LATENCY;               // swiglu_lane latency
   localparam int FW  = $clog2(FIFO_D);
   localparam int AW  = $clog2(SUBS) + 4;
 

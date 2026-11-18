@@ -8,6 +8,7 @@
 // The 32x31 product is split into four 16/17-bit partial products (each fits one
 // DSP 18x18 multiplier) that are summed in registered steps, instead of leaving the
 // decomposition to the tools: this is what makes 150 MHz reachable.
+(* altera_attribute = "-name AUTO_SHIFT_REGISTER_RECOGNITION OFF" *)
 module requant_lane (
   input  logic                clk,
   input  logic                rst_n,
