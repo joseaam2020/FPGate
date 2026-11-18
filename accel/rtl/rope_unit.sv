@@ -131,14 +131,21 @@
   end
 
   // ---- stage B: the operands wait one cycle for the RAM (raddr is registered in A, the RAM output in B) ----
+  // The configuration is static during an operation: local registered copies (two cycles before the products).
+  logic [5:0]  sh_r, pre_r;
+  logic signed [15:0] c0_r;
+  logic signed [33:0] rnd_r;
+  always_ff @(posedge clk) begin
+    sh_r  <= sh;
+    pre_r <= pre;
+    c0_r  <= 16'(32'sd1 <<< (sh_r - pre_r));
+    rnd_r <= 34'sd1 <<< (sh_r - 6'd1);
+  end
+
   logic signed [15:0] xb [4];
   logic        v_b, is0_b, last_b;
   logic [1:0]  bc_b;
-  logic signed [15:0] c_b [2];
-  logic signed [15:0] s_b [2];
   logic signed [31:0] m_xc0 [2], m_x1s [2], m_x1c [2], m_x0s [2];
-
-  wire signed [15:0] c0 = 16'(32'sd1 <<< (sh - pre));
 
   always_ff @(posedge clk) begin
     for (int i = 0; i < 4; i++) xb[i] <= xa[i];
@@ -148,37 +155,68 @@
     bc_b   <= bc_a;
   end
 
-  // ---- stage C: products (the RAM data are available together with xb) ----
-  logic        v_c, is0_c, last_c;
-  logic [1:0]  bc_c;
-  always_comb begin
+  // ---- stage C0: table value or the token-0 constants (the RAM data are available together with xb) ----
+  logic signed [15:0] xc [4];
+  logic signed [15:0] c_c [2];
+  logic signed [15:0] s_c [2];
+  logic        v_c0, last_c0;
+  logic [1:0]  bc_c0;
+  always_ff @(posedge clk) begin
+    for (int i = 0; i < 4; i++) xc[i] <= xb[i];
     for (int l = 0; l < 2; l++) begin
-      c_b[l] = is0_b ? c0 : cos_q[l];
-      s_b[l] = is0_b ? 16'sd0 : sin_q[l];
+      c_c[l] <= is0_b ? c0_r : cos_q[l];
+      s_c[l] <= is0_b ? 16'sd0 : sin_q[l];
     end
+    v_c0    <= rst_n & en & v_b;
+    last_c0 <= last_b;
+    bc_c0   <= bc_b;
   end
+
+  // ---- stage C1: partial products (x * low byte unsigned, x * high byte signed) ----
+  logic signed [24:0] pl [8];   // 0..1 xc0, 2..3 x1s, 4..5 x1c, 6..7 x0s
+  logic signed [23:0] ph [8];
+  logic        v_c1, last_c1;
+  logic [1:0]  bc_c1;
   always_ff @(posedge clk) begin
     for (int l = 0; l < 2; l++) begin
-      m_xc0[l] <= xb[2*l]     * c_b[l];
-      m_x1s[l] <= xb[2*l + 1] * s_b[l];
-      m_x1c[l] <= xb[2*l + 1] * c_b[l];
-      m_x0s[l] <= xb[2*l]     * s_b[l];
+      pl[l]   <= xc[2*l]     * signed'({1'b0, c_c[l][7:0]});
+      ph[l]   <= xc[2*l]     * signed'(c_c[l][15:8]);
+      pl[2+l] <= xc[2*l + 1] * signed'({1'b0, s_c[l][7:0]});
+      ph[2+l] <= xc[2*l + 1] * signed'(s_c[l][15:8]);
+      pl[4+l] <= xc[2*l + 1] * signed'({1'b0, c_c[l][7:0]});
+      ph[4+l] <= xc[2*l + 1] * signed'(c_c[l][15:8]);
+      pl[6+l] <= xc[2*l]     * signed'({1'b0, s_c[l][7:0]});
+      ph[6+l] <= xc[2*l]     * signed'(s_c[l][15:8]);
     end
-    v_c    <= rst_n & en & v_b;
-    last_c <= last_b;
-    bc_c   <= bc_b;
+    v_c1    <= rst_n & en & v_c0;
+    last_c1 <= last_c0;
+    bc_c1   <= bc_c0;
+  end
+
+  // ---- stage C2: full products ----
+  logic        v_c, last_c;
+  logic [1:0]  bc_c;
+  always_ff @(posedge clk) begin
+    for (int l = 0; l < 2; l++) begin
+      m_xc0[l] <= (32'(ph[l])   <<< 8) + 32'(pl[l]);
+      m_x1s[l] <= (32'(ph[2+l]) <<< 8) + 32'(pl[2+l]);
+      m_x1c[l] <= (32'(ph[4+l]) <<< 8) + 32'(pl[4+l]);
+      m_x0s[l] <= (32'(ph[6+l]) <<< 8) + 32'(pl[6+l]);
+    end
+    v_c    <= rst_n & en & v_c1;
+    last_c <= last_c1;
+    bc_c   <= bc_c1;
   end
 
   // ---- stage D: sum with the rounding constant, then shift and saturate ----------------------
   logic signed [33:0] v0 [2], v1 [2];
   logic        v_d, last_d;
   logic [1:0]  bc_d;
-  wire signed [33:0] rnd = 34'sd1 <<< (sh - 6'd1);
 
   always_ff @(posedge clk) begin
     for (int l = 0; l < 2; l++) begin
-      v0[l] <= 34'(m_xc0[l]) - 34'(m_x1s[l]) + rnd;
-      v1[l] <= 34'(m_x1c[l]) + 34'(m_x0s[l]) + rnd;
+      v0[l] <= 34'(m_xc0[l]) - 34'(m_x1s[l]) + rnd_r;
+      v1[l] <= 34'(m_x1c[l]) + 34'(m_x0s[l]) + rnd_r;
     end
     v_d    <= rst_n & en & v_c;
     last_d <= last_c;
@@ -195,15 +233,15 @@
   endfunction
 
   logic signed [COLS-1:0][15:0] acc_row;
-  assign busy = active || v_a || v_b || v_c || v_d;
+  assign busy = active || v_a || v_b || v_c0 || v_c1 || v_c || v_d;
   always_ff @(posedge clk) begin
     out_valid <= 1'b0;
     if (v_d) begin
       logic signed [COLS-1:0][15:0] nxt;
       nxt = acc_row;
       for (int l = 0; l < 2; l++) begin
-        nxt[{bc_d, 2'b00} + 4'(2*l)]     = sat8(v0[l], sh);
-        nxt[{bc_d, 2'b00} + 4'(2*l + 1)] = sat8(v1[l], sh);
+        nxt[{bc_d, 2'b00} + 4'(2*l)]     = sat8(v0[l], sh_r);
+        nxt[{bc_d, 2'b00} + 4'(2*l + 1)] = sat8(v1[l], sh_r);
       end
       acc_row <= nxt;
       if (bc_d == 2'd3) begin
