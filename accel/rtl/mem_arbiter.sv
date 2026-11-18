@@ -73,7 +73,9 @@ module mem_arbiter #(
   logic [PW-1:0] id_wp, id_rp;
   logic [PW:0]   id_cnt;
   logic [7:0]    beat;                      // beats already returned of the oldest burst
-  wire  rd_room = (id_cnt != (PW+1)'(DEPTH));
+  // rd_room is a register (id_cnt != DEPTH computed from the next count): it gates the grant, which reaches the
+  // masters' waitrequest and the engine's output FIFO addresses, so it must not hang off id_cnt combinationally.
+  logic          rd_room;
   wire [9:0] id_head = id_mem[id_rp];
 
   // ---- arbitration ----------------------------------------------------------------------------------------
@@ -135,6 +137,8 @@ module mem_arbiter #(
 
   wire p_taken = p_valid && !s_waitrequest;
   wire acc_rd  = take && in_cmd.rd;
+  wire rd_done = s_readdatavalid && (beat + 1'b1 == id_head[7:0]);
+  wire [PW:0] id_cnt_next = id_cnt + (PW+1)'(acc_rd) - (PW+1)'(rd_done);
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -145,6 +149,7 @@ module mem_arbiter #(
       id_wp   <= '0;
       id_rp   <= '0;
       id_cnt  <= '0;
+      rd_room <= 1'b1;
       beat    <= '0;
     end else begin
       // command path
@@ -196,7 +201,8 @@ module mem_arbiter #(
           beat <= beat + 1'b1;
         end
       end
-      id_cnt <= id_cnt + (PW+1)'(acc_rd) - (PW+1)'(s_readdatavalid && (beat + 1'b1 == id_head[7:0]));
+      id_cnt  <= id_cnt_next;
+      rd_room <= (id_cnt_next != (PW+1)'(DEPTH));
     end
   end
 
