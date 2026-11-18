@@ -70,9 +70,8 @@ module pe #(
 
   // stage 2: accumulate
   always_ff @(posedge clk) begin
-    if (!rst_n)
-      acc <= '0;
-    else if (valid_d)
+    // no reset: in_first (first_d) loads the first product of every tile
+    if (valid_d)
       acc <= first_d ? ACC_W'(prod)
            : shift_d ? (acc <<< 8) + ACC_W'(prod)
            :           acc + ACC_W'(prod);
