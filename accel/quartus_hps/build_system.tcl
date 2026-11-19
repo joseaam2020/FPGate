@@ -10,7 +10,7 @@
 package require -exact qsys 16.1
 
 # accelerator clock (the PLL also clocks the HPS SDRAM port): lowered in 5 MHz steps until timing closes
-set ACCEL_MHZ 120
+set ACCEL_MHZ 130
 
 load_system ghrd_original.qsys
 
