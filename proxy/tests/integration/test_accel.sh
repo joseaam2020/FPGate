@@ -47,6 +47,13 @@ data = open(d + "/white.jpg", "rb").read()
 open(d + "/trunc.jpg", "wb").write(data[: len(data) // 2])
 open(d + "/page.txt", "wb").write(b"hello " * 50)
 Image.new("RGB", (64, 64), (200, 30, 30)).save(d + "/custom.png")
+# Not square, not uniform: squashing and centre-cropping it give different tensors.
+half = Image.new("RGB", (640, 480))
+px = half.load()
+for x in range(640):
+    for y in range(480):
+        px[x, y] = (x * 255 // 639, y * 255 // 479, 255 if x < 160 else 0)
+half.save(d + "/half.png")
 EOF
 export IMG_DIR="$T/img"
 
@@ -78,13 +85,14 @@ CA="-C $T/ca/ca.crt -K $T/ca/ca.key -P $T/pass -B $T/oca.crt"
 # P1 defaults (threshold 0.5)         P2 short timeout, for hang/restart tests
 # P3 slow accelerator, queue of 2     P4 fail-open + threshold 0.6
 # P5 unexamined = block, custom image P6 corrupt = allow
-$BIN -p 18090 $CA --accel $T/m1.sock --accel-timeout-ms 5000 2>$T/p1.log & P1=$!
-$BIN -p 18091 $CA --accel $T/m1.sock --accel-timeout-ms 1000 2>$T/p2.log & P2=$!
-$BIN -p 18092 $CA --accel $T/m2.sock --queue-max 2 --accel-timeout-ms 8000 2>$T/p3.log & P3=$!
-$BIN -p 18093 $CA --accel $T/m1.sock --threshold 0.6 --on-failure allow 2>$T/p4.log & P4=$!
-$BIN -p 18094 $CA --accel $T/m1.sock --on-unexamined block --substitute $T/img/custom.png 2>$T/p5.log & P5=$!
-$BIN -p 18095 $CA --accel $T/m1.sock --on-corrupt allow 2>$T/p6.log & P6=$!
-PIDS="$PIDS $P1 $P2 $P3 $P4 $P5 $P6"
+$BIN -p 18090 $CA --accel $T/m1.sock --verdict-cache 0 --accel-timeout-ms 5000 2>$T/p1.log & P1=$!
+$BIN -p 18091 $CA --accel $T/m1.sock --verdict-cache 0 --accel-timeout-ms 1000 2>$T/p2.log & P2=$!
+$BIN -p 18092 $CA --accel $T/m2.sock --verdict-cache 0 --queue-max 2 --accel-timeout-ms 8000 2>$T/p3.log & P3=$!
+$BIN -p 18093 $CA --accel $T/m1.sock --verdict-cache 0 --threshold 0.6 --on-failure allow 2>$T/p4.log & P4=$!
+$BIN -p 18094 $CA --accel $T/m1.sock --verdict-cache 0 --on-unexamined block --substitute $T/img/custom.png 2>$T/p5.log & P5=$!
+$BIN -p 18095 $CA --accel $T/m1.sock --verdict-cache 0 --on-corrupt allow 2>$T/p6.log & P6=$!
+$BIN -p 18096 $CA --accel $T/m1.sock --verdict-cache 0 --crop 2>$T/p7.log & P7=$!
+PIDS="$PIDS $P1 $P2 $P3 $P4 $P5 $P6 $P7"
 sleep 2.5
 O=http://127.0.0.1:18081
 Q=https://fpgate.test:18443
@@ -130,9 +138,20 @@ curl -s $(hp 18093) "$O/img/white.png" -o "$T/g2.out"; ! cmp -s "$T/g2.out" "$T/
 check "--threshold 0.6: a 1.0 image is still replaced" $?
 
 # --- 3. what reaches the accelerator is exactly the preprocessed tensor --------------------------
-"$PREP" "$T/img/black.png" 448 crop 0 "$T/black.rgb" >/dev/null
+"$PREP" "$T/img/black.png" 448 squash 0 "$T/black.rgb" >/dev/null
 grep -q "$(fsha "$T/black.rgb")" "$T/m1.mock"; check "the accelerator received byte-for-byte the tensor prep_tool makes (RF-03)" $?
 grep -q '"w": 448, "h": 448, "bytes": 602112' "$T/m1.mock"; check "request carried 448x448x3 = 602112 bytes of RGB" $?
+
+# The model was evaluated with Resize((448, 448)) squash, whole image (E1); a centre crop would hide the
+# borders of the picture from the classifier. Squash is the default, --crop the exception.
+"$PREP" "$T/img/half.png" 448 squash 0 "$T/half_squash.rgb" >/dev/null
+"$PREP" "$T/img/half.png" 448 crop 0 "$T/half_crop.rgb" >/dev/null
+[ "$(fsha "$T/half_squash.rgb")" != "$(fsha "$T/half_crop.rgb")" ]; check "the test image gives different tensors when squashed and when centre-cropped" $?
+curl -s $(hp 18090) "$O/img/half.png" -o /dev/null
+grep -q "$(fsha "$T/half_squash.rgb")" "$T/m1.mock"; check "default: the accelerator receives the whole image squashed to 448x448" $?
+! grep -q "$(fsha "$T/half_crop.rgb")" "$T/m1.mock"; check "default: nothing is cropped away" $?
+curl -s $(hp 18096) "$O/img/half.png" -o /dev/null
+grep -q "$(fsha "$T/half_crop.rgb")" "$T/m1.mock"; check "--crop: the shorter side is resized and the centre cropped" $?
 
 # --- 4. the rest of the traffic is untouched ---------------------------------------------------------------
 curl -s $(hp 18090) "$O/img/page.txt" | cmp -s - "$T/img/page.txt"; check "text passes without being judged" $?
@@ -224,13 +243,32 @@ check "and the next image is judged normally" $?
 # --- 10. the C stand-in that runs on the board speaks the same protocol --------------------------------------
 "$MOCKC" "$T/c.sock" --mean --latency-ms 50 --quiet 2>/dev/null & MOCKC_PID=$!
 sleep 0.5
-$BIN -p 18096 $CA --accel $T/c.sock 2>$T/p7.log & P7=$!
+$BIN -p 18096 $CA --accel $T/c.sock --verdict-cache 0 2>$T/p7.log & P7=$!
 sleep 1.5
 curl -s $(hp 18096) "$O/img/black.png" | cmp -s - "$T/img/black.png"; check "C stand-in: a dark image is delivered" $?
 curl -s $(hp 18096) "$O/img/white.png" -o "$T/cw.out"; ! cmp -s "$T/cw.out" "$T/img/white.png" && [ "$(png_info < "$T/cw.out")" = "PNG 800 600" ]
 check "C stand-in: a bright image is replaced" $?
 grep -q 'verdict=block reason=nsfw score=1.000' "$T/p7.log"; check "C stand-in: the verdict is logged with its score" $?
 kill $P7 $MOCKC_PID 2>/dev/null; wait $P7 $MOCKC_PID 2>/dev/null
+
+# --- 10b. verdict cache and minimum size ------------------------------------------------------------------
+$BIN -p 18097 $CA --accel $T/m1.sock --min-judge-px 64 2>$T/p8.log & P8=$!
+PIDS="$PIDS $P8"
+sleep 1.5
+n0=$(grep -c '"bytes": 602112' "$T/m1.mock")
+curl -s $(hp 18097) "$O/img/white.png?c=1" -o "$T/v1.out"; ! cmp -s "$T/v1.out" "$T/img/white.png"
+check "cache on: the first copy of an image is judged and replaced" $?
+curl -s $(hp 18097) "$O/img/white.png?c=2" -o "$T/v2.out"; ! cmp -s "$T/v2.out" "$T/img/white.png"
+check "cache on: the second copy is replaced as well" $?
+n1=$(grep -c '"bytes": 602112' "$T/m1.mock")
+[ $((n1 - n0)) -eq 1 ]; check "the same image twice reached the accelerator once ($((n1 - n0)))" $?
+grep -q 'verdict=block reason=nsfw score=1.000 .*cache=hit' "$T/p8.log"; check "the cached verdict is logged as a hit" $?
+curl -s $(hp 18097) "$O/img/tiny.png" | cmp -s - "$T/img/tiny.png"
+check "--min-judge-px 64: a 40x30 image is delivered unjudged" $?
+n2=$(grep -c '"bytes": 602112' "$T/m1.mock")
+[ "$n2" -eq "$n1" ]; check "and it never reached the accelerator" $?
+grep -q 'verdict=allow reason=small' "$T/p8.log"; check "the decision is logged as small" $?
+kill $P8 2>/dev/null; wait $P8 2>/dev/null
 
 # --- 11. nothing leaks, nothing crashes ----------------------------------------------------------------------------------
 kill -0 $P1 $P2 $P3 $P4 $P5 $P6 2>/dev/null; check "all proxies alive" $?

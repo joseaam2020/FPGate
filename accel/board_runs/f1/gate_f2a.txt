@@ -1,0 +1,23 @@
+RESULT gate: PASS (0 lines differ)
+RESULT time: 6.3-6.4 s/img
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.48, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.44
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.30
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.43, rest 0.07, total 6.28
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.30
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.31
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.45, rest 0.07, total 6.30
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.44, rest 0.07, total 6.29
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.47, rest 0.07, total 6.32
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.42, rest 0.07, total 6.27
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.41, rest 0.07, total 6.26
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.43, rest 0.07, total 6.28
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.47, rest 0.07, total 6.31
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.45, rest 0.07, total 6.30
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.44, rest 0.07, total 6.29
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.44, rest 0.07, total 6.29
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.47, rest 0.07, total 6.32
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.42, rest 0.07, total 6.27
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.31
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.47, rest 0.07, total 6.32
+    time by stage (s): attention 1.43, LayerNorm 0.00, patch_embed 0.35, RoPE 0.00, SwiGLU 0.00, quantise 0.00, PIPELINE (LayerNorm, quantise, linear layers, SwiGLU, RoPE, sums, all overlapped) 4.46, rest 0.07, total 6.31
+20/20 decisions identical, worst logit difference 0.07451

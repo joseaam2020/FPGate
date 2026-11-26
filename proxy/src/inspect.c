@@ -8,6 +8,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <mbedtls/sha256.h>
+
 #include "accel_client.h"
 #include "blocklog.h"
 #include "decode_pool.h"
@@ -19,12 +21,14 @@ static inspect_cfg_t g_cfg = {
     .enabled = 1,
     .max_bytes = 8u * 1024 * 1024,
     .budget_bytes = 64u * 1024 * 1024,
-    .prep = { .size = 448, .center_crop = 1, .dct_scaling = 0, .max_pixels = 16000000ul },
+    .prep = { .size = 448, .center_crop = 0, .dct_scaling = 0, .max_pixels = 16000000ul },
     .workers = 1,
     .threshold = 0.50f,
     .on_failure = POLICY_BLOCK,         /* RF-14: when in doubt, block */
     .on_unexamined = POLICY_ALLOW,
     .on_corrupt = POLICY_BLOCK,
+    .verdict_cache_entries = 4096,
+    .min_judge_px = 0,
 };
 static inspect_stats_t g_stats;
 static size_t g_held;                   /* bytes currently held, all connections */
@@ -37,6 +41,57 @@ const inspect_cfg_t *inspect_config(void) { return &g_cfg; }
 
 void inspect_set_threshold(float threshold) { g_cfg.threshold = threshold; }
 const inspect_stats_t *inspect_stats(void) { return &g_stats; }
+
+/* ---- verdict cache: SHA-256 of the tensor -> score, LRU, OK answers only ---------- */
+
+typedef struct {
+    uint8_t hash[32];
+    float score;
+    unsigned long stamp;                /* 0 = free slot */
+} vc_entry_t;
+
+static vc_entry_t *g_vc;
+static unsigned g_vc_cap;
+static unsigned long g_vc_clock;
+
+static int vc_ready(void)
+{
+    if (g_vc_cap != g_cfg.verdict_cache_entries) {
+        free(g_vc);
+        g_vc = g_cfg.verdict_cache_entries ? calloc(g_cfg.verdict_cache_entries, sizeof *g_vc) : NULL;
+        g_vc_cap = g_vc ? g_cfg.verdict_cache_entries : 0;
+        if (!g_vc)
+            g_cfg.verdict_cache_entries = 0;     /* out of memory: run without the cache */
+    }
+    return g_vc != NULL;
+}
+
+static int vc_get(const uint8_t *hash, float *score)
+{
+    for (unsigned k = 0; k < g_vc_cap; k++)
+        if (g_vc[k].stamp && memcmp(g_vc[k].hash, hash, 32) == 0) {
+            g_vc[k].stamp = ++g_vc_clock;
+            *score = g_vc[k].score;
+            return 1;
+        }
+    return 0;
+}
+
+static void vc_put(const uint8_t *hash, float score)
+{
+    unsigned victim = 0;
+    for (unsigned k = 0; k < g_vc_cap; k++) {
+        if (g_vc[k].stamp && memcmp(g_vc[k].hash, hash, 32) == 0) {
+            victim = k;
+            break;
+        }
+        if (g_vc[k].stamp < g_vc[victim].stamp)
+            victim = k;
+    }
+    memcpy(g_vc[victim].hash, hash, 32);
+    g_vc[victim].score = score;
+    g_vc[victim].stamp = ++g_vc_clock;
+}
 
 enum { M_STREAM, M_SNIFF, M_CAPTURE };
 
@@ -110,6 +165,9 @@ typedef struct ijob {
     double prep_ms;
     double t0;                          /* when the response head arrived */
     int accel_pending;                  /* a request for this job is with the accelerator client */
+    uint8_t hash[32];                   /* SHA-256 of the tensor sent, when the cache is on */
+    int hashed;
+    int cache_hit;
 } ijob_t;
 
 struct inspect {
@@ -255,12 +313,12 @@ static void count_verdict(verdict_t v, vclass_t c)
 }
 
 static void log_verdict(const char *host, const struct rctx *c, verdict_t v, const char *reason,
-                        const accel_result_t *res, double prep_ms, double total_ms)
+                        const accel_result_t *res, double prep_ms, double total_ms, int cache_hit)
 {
     char sfx[300], sc[96] = "";
     if (res && res->outcome == ACCEL_R_OK)
-        snprintf(sc, sizeof sc, " score=%.3f threshold=%.2f accel=%ums", (double)res->score,
-                 (double)g_cfg.threshold, res->wait_ms);
+        snprintf(sc, sizeof sc, " score=%.3f threshold=%.2f accel=%ums%s", (double)res->score,
+                 (double)g_cfg.threshold, res->wait_ms, cache_hit ? " cache=hit" : "");
     fprintf(stderr, "VERDICT host=%s verdict=%s reason=%s%s prep=%.0fms total=%.0fms%s\n", host,
             v == V_ALLOW ? "allow" : "block", reason, sc, prep_ms, total_ms,
             ctx_suffix(sfx, sizeof sfx, c));
@@ -289,7 +347,7 @@ static void settle_now(inspect_t *i, vclass_t c, const char *reason)
 {
     verdict_t v = policy_verdict(c);
     count_verdict(v, c);
-    log_verdict(i->host, &i->cur, v, reason, NULL, 0, now_ms() - i->cur_t0);
+    log_verdict(i->host, &i->cur, v, reason, NULL, 0, now_ms() - i->cur_t0, 0);
     if (v == V_ALLOW) {
         release_held(i);
         return;
@@ -771,7 +829,7 @@ static void finish_job(ijob_t *j, verdict_t v, vclass_t c, const char *reason,
     inspect_t *i = j->owner;
     if (g_cfg.classify) {
         count_verdict(v, c);
-        log_verdict(j->host, &j->ctx, v, reason, res, j->prep_ms, now_ms() - j->t0);
+        log_verdict(j->host, &j->ctx, v, reason, res, j->prep_ms, now_ms() - j->t0, j->cache_hit);
     }
     buf_t out = {0};
     i->out = &out;
@@ -809,6 +867,8 @@ static void on_accel_done(void *user, const accel_result_t *res)
     const char *reason;
     switch (res->outcome) {
     case ACCEL_R_OK:
+        if (j->hashed && !j->cache_hit)
+            vc_put(j->hash, res->score);
         c = C_NSFW;
         v = res->score >= g_cfg.threshold ? V_BLOCK : V_ALLOW;
         reason = v == V_BLOCK ? "nsfw" : "below_threshold";
@@ -853,10 +913,30 @@ void inspect_collect(inspect_ready_fn ready)
         }
         if (dj->status == PREP_OK) {
             /* The tensor now belongs to the accelerator client. */
+            if (g_cfg.min_judge_px > 0 &&
+                (j->src_w < g_cfg.min_judge_px || j->src_h < g_cfg.min_judge_px)) {
+                prep_result_free(&dj->result);
+                finish_job(j, V_ALLOW, C_NSFW, "small", NULL);
+                continue;
+            }
             uint8_t *rgb = dj->result.rgb;
             size_t len = dj->result.rgb_len;
             dj->result.rgb = NULL;
             j->accel_pending = 1;
+            if (vc_ready() && mbedtls_sha256(rgb, len, j->hash, 0) == 0) {
+                float score;
+                if (vc_get(j->hash, &score)) {
+                    g_stats.cache_hits++;
+                    j->cache_hit = 1;
+                    explicit_bzero(rgb, len);
+                    free(rgb);
+                    accel_result_t hit = { .outcome = ACCEL_R_OK, .score = score };
+                    on_accel_done(j, &hit);
+                    continue;
+                }
+                g_stats.cache_misses++;
+                j->hashed = 1;
+            }
             accel_classify(rgb, len, g_cfg.prep.size, g_cfg.prep.size, on_accel_done, j);
             continue;                   /* j may already be gone if the answer was immediate */
         }

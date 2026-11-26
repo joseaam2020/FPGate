@@ -1,0 +1,14 @@
+/dts-v1/;
+/plugin/;
+/ {
+	fragment@0 {
+		target-path = "/soc/base-fpga-region";
+		#address-cells = <2>;
+		#size-cells = <1>;
+		__overlay__ {
+			#address-cells = <2>;
+			#size-cells = <1>;
+			firmware-name = "soc_system.rbf";
+		};
+	};
+};

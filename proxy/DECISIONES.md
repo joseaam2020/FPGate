@@ -28,7 +28,7 @@ Definicion en `src/accel_proto.h`; el mock (`tests/mock_accel/mock_accel.py`) y 
 - El proxy decodifica la imagen, la redimensiona a la resolucion que pida el acelerador y envia **RGB uint8 (HWC)**.
 - `fpgate-accel` normaliza, cuantiza a INT8, coloca los datos en DDR3, maneja CSR/DMA y las operaciones del HPS. Todo lo especifico del modelo (media/desviacion, escalas, clases que forman el score) vive ahi, junto al codigo de entrenamiento y cuantizacion: la poda y la cuantizacion en curso no tocan el proxy.
 - El acelerador **no decide**: devuelve `score_nsfw`. El umbral (RF-09) y la politica ante fallas (RF-14) son del proxy.
-- Resolucion (#4): no esta fijada en el proxy; viaja en la cabecera y se configura. Valor por defecto del mock: 224.
+- Resolucion (#4): no esta fijada en el proxy; viaja en la cabecera y se configura. Congelada en **448** por E1 (`model/docs/e1_referencia.md`); el mock acepta solo 448x448 por defecto (`--size N` para otros, `--size 0` para cualquiera) y responde `UNSUPPORTED` a lo demas, como el acelerador real.
 - Normalizacion (#5): sale del proxy. Lo que queda en el proxy es el **metodo de interpolacion del redimensionado**, que debe coincidir con el entrenamiento; no sera identico byte a byte a PIL, la prueba de DES-3.2 usara una tolerancia documentada.
 
 **Mensajes** (socket Unix, little-endian, cabecera fija de 24 bytes, version 1)
@@ -61,7 +61,7 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 - `resample.c` reproduce el `ImagingResample` de Pillow (coeficientes bicubicos a=-0.5 en punto fijo de 22 bits, pasada horizontal y luego vertical, redondeo a 8 bits entre ambas). `tests/unit/test_prep.py` compara contra Pillow: **identico byte a byte** en 36 casos (JPEG baseline/progresivo/4:4:4/4:2:2/gris, PNG RGB/RGBA/L/LA/paleta/1 bit/Adam7; 448 crop y 224 squash; escalado, identidad y aspectos extremos). x86 y ARM+NEON dan el mismo resultado.
 - Se imita `convert("RGB")`: el alfa se descarta sin componer, se ignoran gamma/ICC/orientacion EXIF, PNG de 16 bits se trunca a 8.
 - Los coeficientes se calculan con `-ffp-contract=off` para que ninguna arquitectura los altere.
-- **Por confirmar con el modelo**: que `crop_pct` de la configuracion de timm sea 1.0 y el modo de recorte sea `center` (ejecutar `model/vit_eval.py`, que imprime "Pipeline de transformaciones"). Si no, cambia `-S`/`-Q` o se ajusta `rs_new`.
+- **Confirmado con el modelo (E1, 2026-11-08)**: la transformacion de evaluacion es `Resize((448, 448))` bicubico con `crop_pct 1.0` en modo **squash** (no conserva la relacion de aspecto; el recorte central no tiene efecto). Por eso el proxy usa **squash por defecto**; `--crop` (reducir el lado corto y recortar el centro) queda como opcion. El recorte esconderia al clasificador los bordes de las fotos apaisadas o verticales, un hueco evidente, ademas de no coincidir con lo evaluado. Hasta esta fecha el valor por defecto era el recorte. `-Q` se acepta y no hace nada, para no romper comandos viejos. Prueba: `test_accel.sh` comprueba que el tensor que recibe el acelerador es el squash de una imagen no cuadrada y no uniforme, y que `--crop` da el otro.
 - `-D` (escalado DCT de libjpeg, 1/2, 1/4, 1/8) acelera la decodificacion de fotos grandes pero **no es identico** al flujo de entrenamiento (diferencia media < 3 niveles en la prueba); queda apagado por defecto hasta medir su efecto en la exactitud.
 
 **Politicas (decisiones #6 y #8, provisionales)**
@@ -109,7 +109,7 @@ Estados: `OK`, `BUSY`, `HW_ERROR`, `UNSUPPORTED` (version, tamano o formato no a
 
 **Memoria y RS-01**: las imagenes retenidas viven en buffers que se copian y se borran con `explicit_bzero` al crecer y al liberar; lo mismo con filas y pixeles temporales en los decodificadores. Nada se escribe a disco. El redimensionado se hace fila a fila mientras se decodifica, asi que una foto de 24 MP no necesita su RGB completo (solo `alto x 448 x 3` bytes).
 
-**Tiempos medidos en la placa** (2026-11-02, Cortex-A9 con NEON, binario estatico musl, salida 448 crop, `prep_tool`):
+**Tiempos medidos en la placa** (2026-11-02, Cortex-A9 con NEON, binario estatico musl, salida 448 crop, `prep_tool`; con squash por defecto estos tiempos hay que volver a medirlos en la placa):
 
 | Imagen | Decodificar + redimensionar | Con `-D` |
 |---|---|---|

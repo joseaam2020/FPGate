@@ -1,0 +1,3 @@
+  rows 32: S alone 0.02 ms rd 4608 wr 4096; SM alone 0.04 ms rd 4096 wr 2048; both 0.04 ms; both+memcpy 40.16 ms
+RESULT conc: S 1027 alone / 1020 conc / 1183 conc+memcpy; SM 2945 alone / 2962 conc / 3220 conc+memcpy; MB/s engine+SM alone 238.0, conc 346.7, conc+memcpy 0.4, memcpy thread 100.2; outputs DIFFER
+  DIFFER: conc differs, conc+memcpy ok

@@ -78,12 +78,13 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-p port] [-C ca.crt -K ca.key [-P passfile] [-B bundle.pem]]\n"
-            "          [-S size] [-Q] [-D] [-L max_bytes] [-W workers] [-V] [-N] [-v]\n"
+            "          [-S size] [--crop] [-D] [-L max_bytes] [-W workers] [-V] [-N] [-v]\n"
             "  -C/-K  CA certificate and (encrypted) private key; enables HTTPS interception\n"
             "  -P     file holding the CA key password (default: $FPGATE_CA_PASS)\n"
             "  -B     trusted CA bundle used to verify the real servers\n"
             "  -S     side of the square image sent to the accelerator (default 448)\n"
-            "  -Q     squash to size x size instead of resize shorter side + centre crop\n"
+            "  --crop resize the shorter side and centre-crop instead of squashing to size x size\n"
+            "         (the default is squash: it is what the model expects and it keeps the whole image)\n"
             "  -D     let the JPEG decoder scale by 1/2, 1/4, 1/8 (faster, not bit-exact with PIL)\n"
             "  -L     largest image analysed, in bytes (default 8388608)\n"
             "  -W     image decode worker threads (default 1, 0 = decode inside the event loop)\n"
@@ -93,6 +94,8 @@ static void usage(const char *prog)
             "Judging images (needs fpgate-accel; without --accel images are only analysed):\n"
             "  --accel PATH          Unix socket of fpgate-accel; images it rates NSFW are replaced\n"
             "  --threshold X         score >= X is replaced (default 0.50)\n"
+            "  --verdict-cache N     scores remembered by image hash (default 4096, 0 = off)\n"
+            "  --min-judge-px N      images with a side below N px pass unjudged (default 0 = off)\n"
             "  --accel-timeout-ms N  limit per image once sent to the accelerator (default 10000)\n"
             "  --queue-max N         images allowed to wait for the accelerator (default 8)\n"
             "  --on-failure P        accelerator down, slow or erroring: block (default) or allow\n"
@@ -150,8 +153,10 @@ int main(int argc, char **argv)
             bundle = argv[++i];
         } else if (strcmp(argv[i], "-S") == 0 && i + 1 < argc) {
             icfg.prep.size = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--crop") == 0) {
+            icfg.prep.center_crop = 1;
         } else if (strcmp(argv[i], "-Q") == 0) {
-            icfg.prep.center_crop = 0;
+            icfg.prep.center_crop = 0;     /* squash, now the default; kept so old command lines work */
         } else if (strcmp(argv[i], "-D") == 0) {
             icfg.prep.dct_scaling = 1;
         } else if (strcmp(argv[i], "-L") == 0 && i + 1 < argc) {
@@ -169,6 +174,10 @@ int main(int argc, char **argv)
             icfg.classify = 1;
         } else if (strcmp(argv[i], "--threshold") == 0 && i + 1 < argc) {
             icfg.threshold = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--verdict-cache") == 0 && i + 1 < argc) {
+            icfg.verdict_cache_entries = (unsigned)atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--min-judge-px") == 0 && i + 1 < argc) {
+            icfg.min_judge_px = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--accel-timeout-ms") == 0 && i + 1 < argc) {
             acfg.timeout_ms = (unsigned)atoi(argv[++i]);
         } else if (strcmp(argv[i], "--queue-max") == 0 && i + 1 < argc) {

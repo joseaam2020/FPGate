@@ -68,8 +68,9 @@ def main():
             json.dump(kw, f)
 
     setcfg(score=0.83)
+    # --size 0: these tests use tiny images; the default size policy is tested at the end.
     mock = subprocess.Popen([sys.executable, MOCK, "--socket", sock, "--config", cfgp,
-                             "--log", logp], stderr=subprocess.DEVNULL)
+                             "--log", logp, "--size", "0"], stderr=subprocess.DEVNULL)
     try:
         for _ in range(50):
             if os.path.exists(sock):
@@ -142,6 +143,27 @@ def main():
     finally:
         mock.kill()
         mock.wait()
+
+    # The default: only the frozen resolution (448x448), like the real accelerator.
+    sock2 = os.path.join(tmp, "strict.sock")
+    strict = subprocess.Popen([sys.executable, MOCK, "--socket", sock2, "--score", "0.3"],
+                              stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(50):
+            if os.path.exists(sock2):
+                break
+            time.sleep(0.1)
+        r = exchange(sock2, 200, 448, 448)
+        check("default size policy: a 448x448 image is classified", r is not None and r[0] == OK)
+        check("default size policy: 224x224 is refused (UNSUPPORTED)",
+              (exchange(sock2, 201, 224, 224) or (None,))[0] == UNSUPPORTED)
+        check("default size policy: a non-square 448x336 image is refused",
+              (exchange(sock2, 202, 448, 336) or (None,))[0] == UNSUPPORTED)
+        r = exchange(sock2, 203, typ=2)
+        check("status requests are unaffected by the size policy", r is not None and r[0] == OK)
+    finally:
+        strict.kill()
+        strict.wait()
 
     sys.exit(failed)
 

@@ -1,11 +1,13 @@
 /*
  * mock_accel: a stand-in for fpgate-accel that runs on the board itself.
  *
- *   mock_accel SOCKET [--mean | --score X] [--latency-ms N] [--quiet]
+ *   mock_accel SOCKET [--mean | --score X] [--latency-ms N] [--size N] [--quiet]
  *
  * --mean       score = mean pixel value / 255, so bright images are "NSFW": a way
  *              to see the replacement happen in a real browser
  * --score X    the same score for every image
+ * --size N    side of the square images accepted (default 448, the resolution the model
+ *              was frozen at); 0 accepts any. Others get UNSUPPORTED, as from the real one
  * --latency-ms N   pretend the inference takes N milliseconds (the design expects 3000-7000)
  *
  * One client at a time, one image at a time, like the real accelerator.
@@ -82,6 +84,7 @@ int main(int argc, char **argv)
     int use_mean = 1, quiet = 0;
     float fixed = 0.0f;
     unsigned latency_ms = 0;
+    unsigned size = 448;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mean"))
@@ -90,12 +93,14 @@ int main(int argc, char **argv)
             use_mean = 0, fixed = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--latency-ms") && i + 1 < argc)
             latency_ms = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--size") && i + 1 < argc)
+            size = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--quiet"))
             quiet = 1;
         else if (argv[i][0] != '-' && !path)
             path = argv[i];
         else {
-            fprintf(stderr, "usage: %s SOCKET [--mean | --score X] [--latency-ms N] [--quiet]\n", argv[0]);
+            fprintf(stderr, "usage: %s SOCKET [--mean | --score X] [--latency-ms N] [--size N] [--quiet]\n", argv[0]);
             return 2;
         }
     }
@@ -148,7 +153,8 @@ int main(int argc, char **argv)
                 continue;
             }
             if (rq.type != ACCEL_MSG_CLASSIFY || rq.channels != 3 || rq.pixfmt != 0 ||
-                rq.payload_len != (uint32_t)rq.width * rq.height * 3u || !rq.payload_len) {
+                rq.payload_len != (uint32_t)rq.width * rq.height * 3u || !rq.payload_len ||
+                (size && (rq.width != size || rq.height != size))) {
                 reply(fd, &rq, ACCEL_UNSUPPORTED, 0, 0);
                 free(px);
                 continue;

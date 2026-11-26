@@ -49,7 +49,7 @@ python3 tests/integration/origin.py 18443 "$T/o.crt" "$T/o.key" & PIDS="$PIDS $!
 $MOCKC "$T/m.sock" --mean --quiet 2>/dev/null & MOCK=$!
 
 CA="-C $T/ca/ca.crt -K $T/ca/ca.key -P $T/pass -B $T/oca.crt"
-$BIN -p 18090 $CA --accel "$T/m.sock" --threshold 0.6 --accel-timeout-ms 3000 \
+$BIN -p 18090 $CA --accel "$T/m.sock" --verdict-cache 0 --threshold 0.6 --accel-timeout-ms 3000 \
     --block-log "$T/blocks.db" 2>"$T/p.log" & P=$!
 sleep 2
 O=http://127.0.0.1:18081
