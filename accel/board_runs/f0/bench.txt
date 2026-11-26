@@ -1,0 +1,30 @@
+[mem] uncached mapping (/dev/mem, O_SYNC): what accel_test uses
+  write, 32-bit stores                               74.8 MB/s
+  read, 32-bit loads                                 32.9 MB/s
+  read, NEON 4 x 16 bytes per step                  104.2 MB/s
+  read, memcpy region -> heap                       154.7 MB/s
+  write, NEON 4 x 16 bytes per step                 125.2 MB/s
+  write, memcpy heap -> region                      111.5 MB/s
+  (reference) memcpy heap -> heap                   280.7 MB/s
+[mem] cached mapping (no O_SYNC): NOT coherent with the FPGA, for reference only
+  write, 32-bit stores                               74.7 MB/s
+  read, 32-bit loads                                 32.9 MB/s
+  read, NEON 4 x 16 bytes per step                  104.2 MB/s
+  read, memcpy region -> heap                       154.7 MB/s
+  write, NEON 4 x 16 bytes per step                 125.2 MB/s
+  write, memcpy heap -> region                      111.4 MB/s
+  (reference) memcpy heap -> heap                   280.5 MB/s
+[cpu] work the HPS would take over (one core; the HPS has two)
+  INT8 GEMM, NEON 2x2 block, one core: 1165 MMAC/s  (128 x 256 x 592 in 16.7 ms)
+    -> patch_embed 1024 x 768 x 588 (0.46 GMAC): about 0.40 s on one core
+    -> all linear layers of one image (about 54 GMAC): about 46 s on one core
+  LayerNorm float32, scalar: 34.3 ms for 1025 x 768  (33445 ns per row)
+    -> 3 per block, 12 blocks (+ the 1232-wide one): about 1.23 s per image
+  Integer softmax, scalar, one head: 55.2 ms for 1025 x 1025  (52.5 ns per element, 49 cycles at 925 MHz)
+    -> 8 heads x 12 blocks: about 5.3 s per image on one core (about half with two cores)
+[micro] ARM microbenchmarks (one core)
+RESULT bench: region_read_ldm8_128B 163.4 MB/s
+RESULT bench: region_read_vld1_d0-d7_128B 163.4 MB/s
+RESULT bench: layernorm_1025x768_phase1_sums 9.37 ms
+RESULT bench: layernorm_1025x768_phase2_variance 10.22 ms
+RESULT bench: layernorm_1025x768_phase3_normalise_div 25.71 ms

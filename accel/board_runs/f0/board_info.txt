@@ -1,0 +1,51 @@
+RESULT uname: BEGIN
+Linux socfpga 4.5.0-00200-g1ec9f95 #4 SMP Wed Aug 16 15:34:44 CST 2017 armv7l GNU/Linux
+RESULT uname: END
+RESULT kconfig: BEGIN
+CONFIG_MODULES_USE_ELF_REL=y
+CONFIG_MODULES=y
+CONFIG_MODULES_TREE_LOOKUP=y
+# CONFIG_CMA is not set
+# CONFIG_UIO is not set
+# CONFIG_STRICT_DEVMEM is not set
+RESULT kconfig: END
+RESULT iomem: BEGIN
+00000000-2fffffff : System RAM
+  00008000-008e5fab : Kernel code
+  00968000-00a07867 : Kernel data
+ff702000-ff703fff : /soc/ethernet@ff702000
+ff704000-ff704fff : /soc/dwmmc0@ff704000
+ff706000-ff706fff : /soc/fpga-mgr@ff706000
+ff708000-ff708fff : /soc/gpio@ff708000
+ff709000-ff709fff : /soc/gpio@ff709000
+ff70a000-ff70afff : /soc/gpio@ff70a000
+ffb40000-ffb4fffe : /soc/usb@ffb40000
+ffb90000-ffb9001f : /soc/fpga-mgr@ff706000
+ffc02000-ffc0201f : serial
+ffc03000-ffc0301f : serial
+ffc04000-ffc04fff : /soc/i2c@ffc04000
+ffd02000-ffd02fff : /soc/watchdog@ffd02000
+ffd05000-ffd05fff : /soc/rstmgr@ffd05000
+ffe01000-ffe01fff : /soc/amba/pdma@ffe01000
+ffff0000-ffffffff : ffff0000.sram
+RESULT iomem: END
+RESULT modules: BEGIN
+build
+kernel
+modules.alias
+modules.alias.bin
+modules.builtin
+modules.builtin.bin
+modules.dep
+modules.dep.bin
+modules.devname
+modules.order
+RESULT modules: END
+RESULT devtree: BEGIN
+RESULT devtree: END
+RESULT cmdline: BEGIN
+console=ttyS0,115200 root=/dev/mmcblk0p2 rw rootwait
+RESULT cmdline: END
+RESULT fw_printenv: BEGIN
+NO_FW_PRINTENV
+RESULT fw_printenv: END
